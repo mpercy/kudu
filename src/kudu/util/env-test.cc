@@ -700,13 +700,17 @@ TEST_F(TestEnv, TestCanonicalize) {
       (GetTestPath("."))
       (GetTestPath("./."))
       (GetTestPath(".//./"));
+  // The test root directory (usually /tmp) may itself be a symbolic link (for
+  // example, on OS X), so it is necessary to canonicalize it.
+  string test_dir;
+  CHECK_OK(env_->Canonicalize(GetTestDataDirectory(), &test_dir));
   BOOST_FOREACH(const string& synonym, synonyms) {
     string result;
     ASSERT_OK(env_->Canonicalize(synonym, &result));
-    ASSERT_EQ(GetTestDataDirectory(), result);
+    ASSERT_EQ(test_dir, result);
   }
 
-  string dir = GetTestPath("some_dir");
+  string dir = test_dir + "/some_dir";
   ASSERT_OK(env_->CreateDir(dir));
   string result;
   ASSERT_OK(env_->Canonicalize(dir + "/", &result));
