@@ -240,6 +240,15 @@ void TryRunLsof(const Sockaddr& addr, vector<string>* log) {
   // Little inline bash script prints the full ancestry of any pid listening
   // on the same port as 'addr'. We could use 'pstree -s', but that option
   // doesn't exist on el6.
+#if defined(__APPLE__)
+  string cmd = strings::Substitute(
+      "export PATH=$$PATH:/usr/sbin ; "
+      "lsof -n -i 'TCP:$0' -sTCP:LISTEN ; "
+      "for pid in $$(lsof -F p -n -i 'TCP:$0' -sTCP:LISTEN | cut -f 2 -dp) ; do"
+      "  ps aux $$pid ;"
+      "done",
+      addr.port());
+#else
   string cmd = strings::Substitute(
       "export PATH=$$PATH:/usr/sbin ; "
       "lsof -n -i 'TCP:$0' -sTCP:LISTEN ; "
@@ -251,6 +260,7 @@ void TryRunLsof(const Sockaddr& addr, vector<string>* log) {
       "  done ; "
       "done",
       addr.port());
+#endif // defined(__APPLE__)
 
   LOG_STRING(WARNING, log) << "Failed to bind to " << addr.ToString() << ". "
                            << "Trying to use lsof to find any processes listening "
