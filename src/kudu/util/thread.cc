@@ -464,7 +464,13 @@ Status Thread::StartThread(const std::string& category, const std::string& name,
 
 void* Thread::SuperviseThread(void* arg) {
   Thread* t = static_cast<Thread*>(arg);
+#if defined(__APPLE__)
+  int64_t system_tid = syscall(SYS_thread_selfid);
+#elif defined(__linux__)
   int64_t system_tid = syscall(SYS_gettid);
+#else
+#error Unsupported platform
+#endif // defined(__APPLE__)
   if (system_tid == -1) {
     string error_msg = ErrnoToString(errno);
     KLOG_EVERY_N(INFO, 100) << "Could not determine thread ID: " << error_msg;
