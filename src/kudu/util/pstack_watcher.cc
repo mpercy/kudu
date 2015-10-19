@@ -107,9 +107,12 @@ Status PstackWatcher::DumpStacks(int flags) {
 
 Status PstackWatcher::DumpPidStacks(pid_t pid, int flags) {
 
-  // Prefer GDB if available; it gives us line numbers and thread names.
+  // Prefer the debugger if available; it gives us line numbers and thread names.
   if (HasProgram("gdb").ok()) {
-    return RunGdbStackDump(pid, flags);
+    return RunDebuggerStackDump("gdb", pid, flags);
+  }
+  if (HasProgram("lldb").ok()) {
+    return RunDebuggerStackDump("lldb", pid, flags);
   }
 
   // Otherwise, try to use pstack or gstack.
@@ -126,9 +129,8 @@ Status PstackWatcher::DumpPidStacks(pid_t pid, int flags) {
   return RunPstack(progname, pid);
 }
 
-Status PstackWatcher::RunGdbStackDump(pid_t pid, int flags) {
+Status PstackWatcher::RunDebuggerStackDump(const string& prog, pid_t pid, int flags) {
   // Command: gdb -quiet -batch -nx -ex cmd1 -ex cmd2 /proc/$PID/exe $PID
-  string prog("gdb");
   vector<string> argv;
   argv.push_back(prog);
   argv.push_back("-quiet");

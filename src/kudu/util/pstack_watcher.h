@@ -67,7 +67,7 @@ class PstackWatcher {
   static Status HasProgram(const char* progname);
 
   // Get a stack dump using GDB directly.
-  static Status RunGdbStackDump(pid_t pid, int flags);
+  static Status RunDebuggerStackDump(const std::string& prog, pid_t pid, int flags);
 
   // Get a stack dump using the pstack or gstack program.
   static Status RunPstack(const std::string& progname, pid_t pid);
