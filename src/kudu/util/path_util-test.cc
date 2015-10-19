@@ -38,7 +38,7 @@ TEST(TestPathUtil, DirNameTest) {
   ASSERT_EQ(".", DirName("."));
   ASSERT_EQ(".", DirName(".."));
   ASSERT_EQ("/", DirName("/"));
-  ASSERT_EQ("//", DirName("//"));
+  ASSERT_EQ("/", DirName("//"));
   ASSERT_EQ(".", DirName("a"));
   ASSERT_EQ(".", DirName("ab"));
   ASSERT_EQ(".", DirName("ab/"));
