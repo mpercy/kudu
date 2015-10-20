@@ -54,15 +54,15 @@ class Semaphore {
   bool try_lock() { return TryAcquire(); }
 
  private:
-  // Log a fatal error message. Separated out to keep the main functions
-  // as small as possible in terms of code size.
-  void Fatal(const char* action) ATTRIBUTE_NORETURN;
-
 #if defined(__APPLE__)
   dispatch_semaphore_t sem_;
   AtomicInt<int32_t> count_;
 #else
   sem_t sem_;
+
+  // Log a fatal error message. Separated out to keep the main functions
+  // as small as possible in terms of code size.
+  void Fatal(const char* action) ATTRIBUTE_NORETURN;
 #endif  // define(__APPLE__)
   DISALLOW_COPY_AND_ASSIGN(Semaphore);
 };
