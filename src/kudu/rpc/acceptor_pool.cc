@@ -95,8 +95,8 @@ void AcceptorPool::Shutdown() {
 
   // Closing the socket will break us out of accept() if we're in it, and
   // prevent future accepts.
-  WARN_NOT_OK(socket_.Shutdown(true, true),
-              strings::Substitute("Could not shut down acceptor socket on $0",
+  WARN_NOT_OK(socket_.Close(),
+              strings::Substitute("Could not close acceptor socket on $0",
                                   bind_address_.ToString()));
 
   BOOST_FOREACH(const scoped_refptr<kudu::Thread>& thread, threads_) {
