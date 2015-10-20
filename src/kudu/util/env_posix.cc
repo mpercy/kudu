@@ -423,21 +423,25 @@ class PosixMmapFile : public WritableFile {
   }
 
   virtual Status PreAllocate(uint64_t size) OVERRIDE {
-#if defined(__linux__)
     ThreadRestrictions::AssertIOAllowed();
     TRACE_EVENT1("io", "PosixMmapFile::PreAllocate", "path", filename_);
-
     uint64_t offset = std::max(filesize_, pre_allocated_size_);
+
+#if defined(__linux__)
     if (fallocate(fd_, 0, offset, size) < 0) {
       return IOError(filename_, errno);
     }
+#else
+    // Only Linux has sparse files by default and the fallocate API. On all
+    // other systems, simply truncate the file to the desired length.
+    if (ftruncate(fd_, offset + size) < 0) {
+      return IOError(filename_, errno);
+    }
+#endif // defined(__linux__)
     // Make sure that we set pre_allocated_size so that the file
     // doesn't get truncated on MapNewRegion().
     pre_allocated_size_ = offset + size;
     return Status::OK();
-#else
-    return Status::NotSupported("Preallocation is not supported on this platform");
-#endif // defined(__linux__)
   }
 
   virtual Status Append(const Slice& data) OVERRIDE {
@@ -610,10 +614,11 @@ class PosixWritableFile : public WritableFile {
   }
 
   virtual Status PreAllocate(uint64_t size) OVERRIDE {
-#if defined(__linux__)
     TRACE_EVENT1("io", "PosixWritableFile::PreAllocate", "path", filename_);
     ThreadRestrictions::AssertIOAllowed();
     uint64_t offset = std::max(filesize_, pre_allocated_size_);
+
+#if defined(__linux__)
     if (fallocate(fd_, 0, offset, size) < 0) {
       if (errno == EOPNOTSUPP) {
         KLOG_FIRST_N(WARNING, 1) << "The filesystem does not support fallocate().";
@@ -622,13 +627,16 @@ class PosixWritableFile : public WritableFile {
       } else {
         return IOError(filename_, errno);
       }
-    } else {
-      pre_allocated_size_ = offset + size;
     }
-    return Status::OK();
 #else
-    return Status::NotSupported("Preallocation is not supported on this platform");
+    // Only Linux has sparse files by default and the fallocate API. On all
+    // other systems, simply truncate the file to the desired length.
+    if (ftruncate(fd_, offset + size) < 0) {
+      return IOError(filename_, errno);
+    }
 #endif // defined(__linux__)
+    pre_allocated_size_ = offset + size;
+    return Status::OK();
   }
 
   virtual Status Close() OVERRIDE {
@@ -844,10 +852,17 @@ class PosixRWFile : public RWFile {
         return IOError(filename_, errno);
       }
     }
-    return Status::OK();
 #else
-    return Status::NotSupported("Preallocation is not supported on this platform");
+    // Only Linux has sparse files by default and the fallocate API. On all
+    // other systems, simply truncate the file to the desired length.
+    uint64_t size;
+    RETURN_NOT_OK(Size(&size));
+    if (size < offset + length &&
+        ftruncate(fd_, offset + length) < 0) {
+      return IOError(filename_, errno);
+    }
 #endif // defined(__linux__)
+    return Status::OK();
   }
 
   virtual Status PunchHole(uint64_t offset, size_t length) OVERRIDE {
