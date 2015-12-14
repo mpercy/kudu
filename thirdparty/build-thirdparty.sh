@@ -103,6 +103,76 @@ if [ -n "$F_ALL" -o -n "$F_CMAKE" ]; then
   make install
 fi
 
+# build llvm
+if [ -n "$F_ALL" -o -n "$F_LLVM" ]; then
+
+  # Install Python if necessary.
+  if [[ $(python -V 2>&1) =~ "Python 2.7." ]]; then
+    PYTHON_EXECUTABLE=$(which python)
+  else
+    cd $PYTHON_DIR
+    ./configure --prefix=$PREFIX
+    make -j$PARALLEL
+    make install
+    PYTHON_EXECUTABLE=$PREFIX/bin/python
+  fi
+
+  mkdir -p $LLVM_BUILD
+  cd $LLVM_BUILD
+
+  # Rebuild the CMake cache every time.
+  rm -Rf CMakeCache.txt CMakeFiles/
+
+  $PREFIX/bin/cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=$PREFIX \
+    -DLLVM_TARGETS_TO_BUILD=X86 \
+    -DLLVM_ENABLE_RTTI=ON \
+    -DCMAKE_CXX_FLAGS="$EXTRA_CXXFLAGS" \
+    -DPYTHON_EXECUTABLE=$PYTHON_EXECUTABLE \
+    $LLVM_DIR
+
+  if [ -n "$old_cc" ]; then
+    export CC=$old_cc
+  else
+    unset CC
+  fi
+  if [ -n "$old_cxx" ]; then
+    export CXX=$old_cxx
+  else
+    unset CXX
+  fi
+
+  make -j$PARALLEL install
+
+  # Create a link from Clang to thirdparty/clang-toolchain. This path is used
+  # for compiling Kudu with sanitizers. The link can't point to the Clang
+  # installed in the prefix directory, since this confuses CMake into believing
+  # the thirdparty prefix directory is the system-wide prefix, and it omits the
+  # thirdparty prefix directory from the rpath of built binaries.
+  ln -sf $LLVM_BUILD $TP_DIR/clang-toolchain
+fi
+
+if [ -n "$KUDU_USE_TSAN" ]; then
+
+  export CC=$PREFIX/bin/clang
+  export CXX=$PREFIX/bin/clang++
+
+  # Build TSAN instrumented libstdc++.
+  if [ -n "$F_ALL" -o -n "$F_GCC" ]; then
+    mkdir -p $GCC_BUILD
+    cd $GCC_BUILD
+
+    $GCC_DIR/libstdc++-v3/configure --enable-multilib=no
+    make -j$PARALLEL
+  fi
+
+  EXTRA_CFLAGS="-fPIC"
+  EXTRA_CXXFLAGS="-fPIC ${EXTRA_CXXFLAGS}"
+  EXTRA_LDFLAGS="-Wl,-rpath,${GCC_BUILD}/src/.libs/ -fPIE -pie ${EXTRA_LDFLAGS}"
+fi
+
+
 # build gflags
 if [ -n "$F_ALL" -o -n "$F_GFLAGS" ]; then
   cd $GFLAGS_DIR
@@ -127,9 +197,9 @@ if [ -n "$F_ALL" -o -n "$F_GLOG" ]; then
   cd $GLOG_DIR
   # We need to set "-g -O2" because glog only provides those flags when CXXFLAGS is unset.
   # Help glog find libunwind.
-  CXXFLAGS="$EXTRA_CXXFLAGS" \
+  CXXFLAGS="${EXTRA_CXXFLAGS}" \
     CPPFLAGS=-I$PREFIX/include \
-    LDFLAGS=-L$PREFIX/lib \
+    LDFLAGS="-L${PREFIX}/lib ${EXTRA_LDFLAGS}" \
     ./configure --with-pic --prefix=$PREFIX --with-gflags=$PREFIX
   make -j$PARALLEL install
 fi
@@ -148,7 +218,7 @@ if [ -n "$F_ALL" -o -n "$F_GMOCK" ]; then
   # Run the static library build, then the shared library build.
   for SHARED in OFF ON; do
     rm -rf CMakeCache.txt CMakeFiles/
-    CXXFLAGS="-fPIC -g $EXTRA_CXXFLAGS" \
+    CXXFLAGS="-fPIC -g ${EXTRA_CXXFLAGS} ${EXTRA_LDFLAGS}" \
       $PREFIX/bin/cmake -DBUILD_SHARED_LIBS=$SHARED .
     make -j$PARALLEL
   done
@@ -172,7 +242,8 @@ fi
 # build snappy
 if [ -n "$F_ALL" -o -n "$F_SNAPPY" ]; then
   cd $SNAPPY_DIR
-  CXXFLAGS=$EXTRA_CXXFLAGS \
+  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+    LDFLAGS="${EXTRA_LDFLAGS}" \
     ./configure --with-pic --prefix=$PREFIX
   make -j$PARALLEL install
 fi
@@ -277,56 +348,6 @@ fi
 # Copy gcovr tool into bin directory
 if [ -n "$F_ALL" -o -n "$F_GCOVR" ]; then
   cp -a $GCOVR_DIR/scripts/gcovr $PREFIX/bin/gcovr
-fi
-
-# build llvm
-if [ -n "$F_ALL" -o -n "$F_LLVM" ]; then
-
-  # Install Python if necessary.
-  if [[ $(python -V 2>&1) =~ "Python 2.7." ]]; then
-    PYTHON_EXECUTABLE=$(which python)
-  else
-    cd $PYTHON_DIR
-    ./configure --prefix=$PREFIX
-    make -j$PARALLEL
-    make install
-    PYTHON_EXECUTABLE=$PREFIX/bin/python
-  fi
-
-  mkdir -p $LLVM_BUILD
-  cd $LLVM_BUILD
-
-  # Rebuild the CMake cache every time.
-  rm -Rf CMakeCache.txt CMakeFiles/
-
-  $PREFIX/bin/cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=$PREFIX \
-    -DLLVM_TARGETS_TO_BUILD=X86 \
-    -DLLVM_ENABLE_RTTI=ON \
-    -DCMAKE_CXX_FLAGS="$EXTRA_CXXFLAGS" \
-    -DPYTHON_EXECUTABLE=$PYTHON_EXECUTABLE \
-    $LLVM_DIR
-
-  if [ -n "$old_cc" ]; then
-    export CC=$old_cc
-  else
-    unset CC
-  fi
-  if [ -n "$old_cxx" ]; then
-    export CXX=$old_cxx
-  else
-    unset CXX
-  fi
-
-  make -j$PARALLEL install
-
-  # Create a link from Clang to thirdparty/clang-toolchain. This path is used
-  # for compiling Kudu with sanitizers. The link can't point to the Clang
-  # installed in the prefix directory, since this confuses CMake into believing
-  # the thirdparty prefix directory is the system-wide prefix, and it omits the
-  # thirdparty prefix directory from the rpath of built binaries.
-  ln -sf $LLVM_BUILD $TP_DIR/clang-toolchain
 fi
 
 # Build trace-viewer (by copying it into www/)
