@@ -65,6 +65,7 @@ else
       "crcutil")    F_CRCUTIL=1 ;;
       "libunwind")  F_LIBUNWIND=1 ;;
       "llvm")       F_LLVM=1 ;;
+      "gcc")        F_GCC=1 ;;
       "trace-viewer") F_TRACE_VIEWER=1 ;;
       "nvml")       F_NVML=1 ;;
       *)            echo "Unknown module: $arg"; exit 1 ;;
@@ -155,28 +156,38 @@ fi
 
 if [ -n "$KUDU_USE_TSAN" ]; then
 
-  export CC=$PREFIX/bin/clang
-  export CXX=$PREFIX/bin/clang++
 
   # Build TSAN instrumented libstdc++.
   if [ -n "$F_ALL" -o -n "$F_GCC" ]; then
     mkdir -p $GCC_BUILD
     cd $GCC_BUILD
 
-    $GCC_DIR/libstdc++-v3/configure --enable-multilib=no
-    make -j$PARALLEL
+    CC=$PREFIX/bin/clang \
+      CXX="$PREFIX/bin/clang++ \
+      $GCC_DIR/libstdc++-v3/configure \
+      --enable-multilib=no \
+      --prefix="${PREFIX}/gcc"
+    make -j$PARALLEL install
   fi
+
+  #export CC="$PREFIX/bin/clang --gcc-toolchain=$PREFIX/gcc"
+  #export CXX="$PREFIX/bin/clang++ --gcc-toolchain=$PREFIX/gcc"
+
+  export CC="$PREFIX/bin/clang"
+  export CXX="$PREFIX/bin/clang++"
 
   EXTRA_CFLAGS="-fPIC"
   EXTRA_CXXFLAGS="-fPIC ${EXTRA_CXXFLAGS}"
-  EXTRA_LDFLAGS="-Wl,-rpath,${GCC_BUILD}/src/.libs/ -fPIE -pie ${EXTRA_LDFLAGS}"
+  EXTRA_LDFLAGS="-Wl,-rpath,${PREFIX}/gcc/lib -fPIE -pie"
 fi
 
 
 # build gflags
 if [ -n "$F_ALL" -o -n "$F_GFLAGS" ]; then
   cd $GFLAGS_DIR
-  CXXFLAGS=$EXTRA_CXXFLAGS ./configure --with-pic --prefix=$PREFIX
+  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+    LD_FLAGS="${EXTRA_LDFLAGS}" \
+    ./configure --with-pic --prefix=$PREFIX
   make -j$PARALLEL install
 fi
 
@@ -207,7 +218,9 @@ fi
 # build gperftools
 if [ -n "$F_ALL" -o -n "$F_GPERFTOOLS" ]; then
   cd $GPERFTOOLS_DIR
-  CXXFLAGS=$EXTRA_CXXFLAGS ./configure \
+  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+    LDFLAGS="${EXTRA_LDFLAGS}" \
+    ./configure \
     --enable-frame-pointers --enable-heap-checker --with-pic --prefix=$PREFIX
   make -j$PARALLEL install
 fi
@@ -231,7 +244,9 @@ fi
 # build protobuf
 if [ -n "$F_ALL" -o -n "$F_PROTOBUF" ]; then
   cd $PROTOBUF_DIR
-  CXXFLAGS="$EXTRA_CXXFLAGS" LDFLAGS="${EXTRA_LDFLAGS}" LIBS="${EXTRA_LIBS}" ./configure \
+  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+    LDFLAGS="${EXTRA_LDFLAGS}" \
+    ./configure \
     --with-pic \
     --enable-shared \
     --enable-static \
