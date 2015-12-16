@@ -47,7 +47,7 @@ using kudu::client::KuduSession;
 using kudu::client::KuduStatusCallback;
 using kudu::client::KuduTable;
 using kudu::client::KuduTableCreator;
-using kudu::client::sp;
+using kudu::twitter_demo::sp::shared_ptr;
 
 FlushCB::FlushCB(InsertConsumer* consumer)
   : consumer_(consumer) {
@@ -60,7 +60,7 @@ void FlushCB::Run(const Status& status) {
   consumer_->BatchFinished(status);
 }
 
-InsertConsumer::InsertConsumer(const sp::shared_ptr<KuduClient> &client)
+InsertConsumer::InsertConsumer(const shared_ptr<KuduClient> &client)
   : initted_(false),
     schema_(CreateTwitterSchema()),
     flush_cb_(this),

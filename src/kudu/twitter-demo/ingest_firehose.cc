@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 #include "kudu/client/client.h"
+#include "kudu/client/shared_ptr.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/once.h"
 #include "kudu/rpc/messenger.h"
@@ -50,7 +51,7 @@ DEFINE_string(twitter_firehose_file, "/dev/fd/0",
 
 
 using std::string;
-using std::shared_ptr;
+using kudu::client::sp::shared_ptr;
 
 namespace kudu {
 namespace twitter_demo {
