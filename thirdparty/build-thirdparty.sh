@@ -164,6 +164,7 @@ if [ -n "$KUDU_USE_TSAN" ]; then
 
     CC=$PREFIX/bin/clang \
       CXX=$PREFIX/bin/clang++ \
+      CXXFLAGS=-fsanitize=thread \
       $GCC_DIR/libstdc++-v3/configure \
       --enable-multilib=no \
       --prefix="${PREFIX}/gcc"
@@ -178,6 +179,7 @@ if [ -n "$KUDU_USE_TSAN" ]; then
 
   EXTRA_CFLAGS="-fPIC"
   EXTRA_CXXFLAGS="-fPIC ${EXTRA_CXXFLAGS}"
+  EXTRA_SANITIZER_CXXFLAGS="-fsantize=thread"
   EXTRA_LDFLAGS="-Wl,-rpath,${PREFIX}/gcc/lib -fPIE -pie"
 fi
 
@@ -218,7 +220,7 @@ fi
 # build gperftools
 if [ -n "$F_ALL" -o -n "$F_GPERFTOOLS" ]; then
   cd $GPERFTOOLS_DIR
-  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+  CXXFLAGS="${EXTRA_CXXFLAGS} ${EXTRA_SANITIZER_CXXFLAGS}" \
     LDFLAGS="${EXTRA_LDFLAGS}" \
     ./configure \
     --enable-frame-pointers --enable-heap-checker --with-pic --prefix=$PREFIX
@@ -244,7 +246,7 @@ fi
 # build protobuf
 if [ -n "$F_ALL" -o -n "$F_PROTOBUF" ]; then
   cd $PROTOBUF_DIR
-  CXXFLAGS="${EXTRA_CXXFLAGS}" \
+  CXXFLAGS="${EXTRA_CXXFLAGS} ${EXTRA_SANITIZER_CXXFLAGS}" \
     LDFLAGS="${EXTRA_LDFLAGS}" \
     ./configure \
     --with-pic \
