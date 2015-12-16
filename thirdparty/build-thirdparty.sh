@@ -163,7 +163,7 @@ if [ -n "$KUDU_USE_TSAN" ]; then
     cd $GCC_BUILD
 
     CC=$PREFIX/bin/clang \
-      CXX="$PREFIX/bin/clang++ \
+      CXX=$PREFIX/bin/clang++ \
       $GCC_DIR/libstdc++-v3/configure \
       --enable-multilib=no \
       --prefix="${PREFIX}/gcc"
