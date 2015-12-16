@@ -226,5 +226,9 @@ if [ -n "$OS_LINUX" -a ! -d $NVML_DIR ]; then
   fetch_and_expand nvml-${NVML_VERSION}.tar.gz
 fi
 
+if [ ! -d $GCC_DIR ]; then
+  fetch_and_expand gcc-${GCC_VERSION}.tar.gz
+fi
+
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"
