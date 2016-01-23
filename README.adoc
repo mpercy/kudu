@@ -292,24 +292,33 @@ scan of the source tree, you may use the `lint` target instead.
 
 Kudu's documentation is written in asciidoc and lives in the _docs_ subdirectory.
 
-To build the documentation (this is primarily useful if you would like to
-inspect your changes before submitting them to Gerrit), use the `docs` target:
+To build the documentation or the site, the pre-requisites for building Kudu
+itself must be installed, as well as the a few more system packages:
+
+[source,bash]
+----
+$ sudo apt-get install ruby ruby-devel xsltproc # for Ubuntu
+----
+
+(Or the equivalent for other platforms.)
+
+Then, to build the docs in a form that is convenient for testing changes to the
+.adoc source files, but not in a way that integrates with the look and feel of
+Kudu web site, run the following command:
 
 [source,bash]
 ----
 $ make docs
 ----
 
-This will invoke `docs/support/scripts/make_docs.sh`, which requires
-`asciidoctor` to process the doc sources and produce the HTML documentation,
-emitted to _build/docs_. This script requires `ruby` and `gem` to be installed
-on the system path, and will attempt to install `asciidoctor` and other related
-dependencies into `$HOME/.gems` using http://bundler.io/[bundler].
+This will invoke `docs/support/scripts/make_docs.sh`, and will place the
+generated HTML files in the _build/docs_ subdirectory.
 
 === Updating the documentation on the Kudu web site
 
 To update the documentation that is integrated into the Kudu web site,
-including Javadoc documentation, you may run the following command:
+including Javadoc documentation, first install the docs pre-requisites as
+described above, then run the following command:
 
 [source,bash]
 ----
@@ -323,9 +332,16 @@ placed inside the checked-out web site, along with a tarball containing only
 the generated documentation (the _docs/_ and _apidocs/_ paths on the web site).
 Everything can be found in the _build/site_ subdirectory.
 
-You can proceed to commit the changes in the pages repository and send a code
-review for your changes. In the future, this step may be automated whenever
-changes are checked into the main Kudu repository.
+You can then proceed to commit the changes on your local `gh-pages` branch and
+send a Gerrit code review for that branch.
+
+You can submit a Gerrit code review for the `gh-pages` branch using
+command-line syntax like the following:
+
+[source,bash]
+----
+git push --no-thin gerrit HEAD:refs/for/gh-pages
+----
 
 == Improving build times
 
