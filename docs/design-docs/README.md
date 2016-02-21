@@ -35,3 +35,4 @@ made.
 | [C++ client design and impl. details](cpp-client.md) | Client | N/A |
 | [(old) Heartbeating between tservers and multiple masters](old-multi-master-heartbeating.md) | Master | [gerrit](http://gerrit.cloudera.org:8080/2495) |
 | [Scan Token API](scan-tokens.md) | Client | [gerrit](http://gerrit.cloudera.org:8080/2443) |
+| [RPC Retry/Failover semantics](rpc-retry-and-failover.md) | Client/TS/Master | [gerrit](http://gerrit.cloudera.org:8080/2642) |
