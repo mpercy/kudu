@@ -238,6 +238,7 @@ Status FsManager::Open() {
     }
   }
 
+  LOG(INFO) << "Opening block manager...";
   RETURN_NOT_OK(block_manager_->Open());
   LOG(INFO) << "Opened local filesystem: " << JoinStrings(canonicalized_all_fs_roots_, ",")
             << std::endl << metadata_->DebugString();

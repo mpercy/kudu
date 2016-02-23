@@ -169,6 +169,7 @@ Status ServerBase::Init() {
     s = fs_manager_->Open();
   }
   RETURN_NOT_OK_PREPEND(s, "Failed to load FS layout");
+  LOG(INFO) << "Opened FsManager";
 
   // Create the Messenger.
   rpc::MessengerBuilder builder(name_);

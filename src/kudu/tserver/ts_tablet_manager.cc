@@ -190,6 +190,7 @@ Status TSTabletManager::Init() {
   // First, load all of the tablet metadata. We do this before we start
   // submitting the actual OpenTablet() tasks so that we don't have to compete
   // for disk resources, etc, with bootstrap processes and running tablets.
+  LOG(INFO) << "Opening metadata for tablets...";
   for (const string& tablet_id : tablet_ids) {
     scoped_refptr<TabletMetadata> meta;
     RETURN_NOT_OK_PREPEND(OpenTabletMeta(tablet_id, &meta),
@@ -219,6 +220,7 @@ Status TSTabletManager::Init() {
     state_ = MANAGER_RUNNING;
   }
 
+  LOG(INFO) << "Tablet manager initialized";
   return Status::OK();
 }
 
