@@ -56,6 +56,7 @@ namespace kudu {
 
 void PrintUsage(char** argv) {
   std::cerr << "usage: " << argv[0] << " "
+            << "[--master_address <master-address>] "
             << kTwitterTabletId << "|"
             << kTPCH1TabletId << "|"
             << kYCSBTabletId
