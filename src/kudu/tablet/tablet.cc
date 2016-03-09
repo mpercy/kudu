@@ -97,7 +97,6 @@ DEFINE_double(fault_crash_before_flush_tablet_meta_after_flush_mrs, 0.0,
               "Fraction of the time, while flushing an MRS, to crash before flushing metadata");
 TAG_FLAG(fault_crash_before_flush_tablet_meta_after_flush_mrs, unsafe);
 
-
 DEFINE_int64(tablet_throttler_rpc_per_sec, 0,
              "Maximum write RPC rate (op/s) allowed for a tablet, write RPC exceeding this "
              "limit will be throttled. 0 means no limit.");
@@ -114,6 +113,12 @@ DEFINE_double(tablet_throttler_burst_factor, 1.0f,
              "base rate.");
 TAG_FLAG(tablet_throttler_burst_factor, experimental);
 
+DEFINE_int32(tablet_history_max_age_sec, 604800,
+             "Number of seconds to retain tablet history. Reads initiated at a "
+             "snapshot that is older than this age will be rejected.");
+TAG_FLAG(tablet_history_max_age_sec, advanced);
+
+
 METRIC_DEFINE_entity(tablet);
 METRIC_DEFINE_gauge_size(tablet, memrowset_size, "MemRowSet Memory Usage",
                          kudu::MetricUnit::kBytes,
@@ -124,6 +129,7 @@ METRIC_DEFINE_gauge_size(tablet, on_disk_size, "Tablet Size On Disk",
 
 using std::shared_ptr;
 using std::string;
+using std::unique_ptr;
 using std::unordered_set;
 using std::vector;
 
@@ -651,7 +657,7 @@ Status Tablet::DoMajorDeltaCompaction(const vector<ColumnId>& col_ids,
                                       shared_ptr<RowSet> input_rs) {
   CHECK_EQ(state_, kOpen);
   Status s = down_cast<DiskRowSet*>(input_rs.get())
-      ->MajorCompactDeltaStoresWithColumnIds(col_ids);
+      ->MajorCompactDeltaStoresWithColumnIds(col_ids, clock_->NowLatest());
   return s;
 }
 
@@ -1414,6 +1420,7 @@ Status Tablet::Compact(CompactFlags flags) {
   RETURN_NOT_OK_PREPEND(PickRowSetsToCompact(&input, flags),
                         "Failed to pick rowsets to compact");
   if (input.num_rowsets() < 2) {
+    // TODO: Remove this requirement once KUDU-236 is implemented.
     VLOG_WITH_PREFIX(1) << "Not enough rowsets to run compaction! Aborting...";
     return Status::OK();
   }
@@ -1689,21 +1696,22 @@ Status Tablet::FlushBiggestDMS() {
 Status Tablet::CompactWorstDeltas(RowSet::DeltaCompactionType type) {
   CHECK_EQ(state_, kOpen);
   shared_ptr<RowSet> rs;
+
   // We're required to grab the rowset's compact_flush_lock under the compact_select_lock_.
-  shared_ptr<boost::mutex::scoped_try_lock> lock;
+  unique_ptr<boost::mutex::scoped_try_lock> lock;
   double perf_improv;
   {
     // We only want to keep the selection lock during the time we look at rowsets to compact.
     // The returned rowset is guaranteed to be available to lock since locking must be done
     // under this lock.
     boost::lock_guard<boost::mutex> compact_lock(compact_select_lock_);
+    // TODO: Plumb the timestamp into here.
     perf_improv = GetPerfImprovementForBestDeltaCompactUnlocked(type, &rs);
-    if (rs) {
-      lock.reset(new boost::mutex::scoped_try_lock(*rs->compact_flush_lock()));
-      CHECK(lock->owns_lock());
-    } else {
+    if (!rs) {
       return Status::OK();
     }
+    lock.reset(new boost::mutex::scoped_try_lock(*rs->compact_flush_lock()));
+    CHECK(lock->owns_lock());
   }
 
   // We just released compact_select_lock_ so other compactions can select and run, but the
@@ -1713,7 +1721,7 @@ Status Tablet::CompactWorstDeltas(RowSet::DeltaCompactionType type) {
     RETURN_NOT_OK_PREPEND(rs->MinorCompactDeltaStores(),
                           "Failed minor delta compaction on " + rs->ToString());
   } else if (type == RowSet::MAJOR_DELTA_COMPACTION) {
-    RETURN_NOT_OK_PREPEND(down_cast<DiskRowSet*>(rs.get())->MajorCompactDeltaStores(),
+    RETURN_NOT_OK_PREPEND(down_cast<DiskRowSet*>(rs.get())->MajorCompactDeltaStores(clock_->NowLatest()),
                           "Failed major delta compaction on " + rs->ToString());
   }
   return Status::OK();

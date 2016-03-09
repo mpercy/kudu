@@ -28,12 +28,16 @@
 #include "kudu/gutil/strings/strcat.h"
 #include "kudu/common/columnblock.h"
 #include "kudu/cfile/cfile_reader.h"
+#include "kudu/server/hybrid_clock.h"
 #include "kudu/tablet/cfile_set.h"
 #include "kudu/tablet/compaction.h"
 #include "kudu/tablet/delta_key.h"
 #include "kudu/tablet/deltamemstore.h"
 #include "kudu/tablet/multi_column_writer.h"
 #include "kudu/tablet/mvcc.h"
+
+DECLARE_bool(use_hybrid_clock);
+DECLARE_int32(tablet_history_max_age_sec);
 
 using std::shared_ptr;
 
@@ -43,6 +47,7 @@ using cfile::CFileIterator;
 using cfile::CFileReader;
 using cfile::IndexTreeIterator;
 using fs::WritableBlock;
+using server::HybridClock;
 using std::vector;
 using strings::Substitute;
 
@@ -60,10 +65,12 @@ MajorDeltaCompaction::MajorDeltaCompaction(
     FsManager* fs_manager, const Schema& base_schema, CFileSet* base_data,
     shared_ptr<DeltaIterator> delta_iter,
     vector<shared_ptr<DeltaStore> > included_stores,
-    const vector<ColumnId>& col_ids)
+    const vector<ColumnId>& col_ids,
+    Timestamp ts)
     : fs_manager_(fs_manager),
       base_schema_(base_schema),
       column_ids_(col_ids),
+      ts_(ts),
       base_data_(base_data),
       included_stores_(std::move(included_stores)),
       delta_iter_(std::move(delta_iter)),
@@ -94,6 +101,14 @@ Status MajorDeltaCompaction::FlushRowSetAndDeltas() {
 
   shared_ptr<ColumnwiseIterator> old_base_data_cwise(base_data_->NewIterator(&partial_schema_));
   gscoped_ptr<RowwiseIterator> old_base_data_rwise(new MaterializingIterator(old_base_data_cwise));
+
+  const bool kEnableHistoryGC = FLAGS_use_hybrid_clock && FLAGS_tablet_history_max_age_sec > 0;
+  Timestamp ancient_history_mark;
+  if (PREDICT_TRUE(kEnableHistoryGC)) {
+    MonoDelta neg_hist_age = MonoDelta::FromSeconds(-1 * FLAGS_tablet_history_max_age_sec);
+    ancient_history_mark =
+        HybridClock::AddPhysicalTimeToTimestamp(ts_, neg_hist_age);
+  }
 
   ScanSpec spec;
   spec.set_cache_blocks(false);
@@ -147,6 +162,8 @@ Status MajorDeltaCompaction::FlushRowSetAndDeltas() {
 
       RETURN_NOT_OK(ApplyMutationsAndGenerateUndos(snap,
                                                    input_row,
+                                                   kEnableHistoryGC,
+                                                   ancient_history_mark,
                                                    &base_schema_,
                                                    &new_undos_head,
                                                    &new_redos_head,

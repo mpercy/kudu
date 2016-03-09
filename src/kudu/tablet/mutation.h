@@ -75,8 +75,6 @@ class Mutation {
   template<bool ATOMIC>
   void DoAppendToList(Mutation **list);
 
-  DISALLOW_COPY_AND_ASSIGN(Mutation);
-
   // The transaction ID which made this mutation. If this transaction is not
   // committed in the snapshot of the reader, this mutation should be ignored.
   Timestamp timestamp_;
@@ -88,6 +86,8 @@ class Mutation {
 
   // The actual encoded RowChangeList
   char changelist_data_[0];
+
+  DISALLOW_COPY_AND_ASSIGN(Mutation);
 };
 
 template<class ArenaType>

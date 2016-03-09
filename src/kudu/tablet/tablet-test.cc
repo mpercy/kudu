@@ -622,8 +622,6 @@ TYPED_TEST(TestTablet, TestMultipleUpdates) {
   ASSERT_EQ(this->setup_.FormatDebugRow(1, 0, false), out_rows[1]);
 }
 
-
-
 TYPED_TEST(TestTablet, TestCompaction) {
   uint64_t max_rows = this->ClampRowCount(FLAGS_testcompaction_num_rows);
 
@@ -690,6 +688,55 @@ TYPED_TEST(TestTablet, TestCompaction) {
     const RowSetMetadata *rowset_meta = this->tablet()->metadata()->GetRowSetForTests(i);
     ASSERT_TRUE(rowset_meta == nullptr);
   }
+}
+
+TYPED_TEST(TestTablet, TestHistoryGCOnMajorCompaction) {
+  FLAGS_tablet_history_max_age_sec = 1;
+
+  uint64_t max_rows = this->ClampRowCount(FLAGS_testcompaction_num_rows);
+
+  uint64_t n_rows = max_rows / 3;
+  for (int rowset_id = 0; rowset_id < 3; rowset_id++) {
+    this->InsertTestRows(0, n_rows, 0);
+    ASSERT_OK(this->tablet()->Flush());
+  }
+
+  // Sleep for 2 seconds so that the original inserts will be beyond the
+  // ancient history mark when we compact.
+  // TODO: Figure out if it's possible to make this work with a mock clock.
+  SleepFor(MonoDelta::FromSeconds(2));
+
+  // Mutate all of the rows.
+  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  for (int row_idx = 0; row_idx < max_rows; row_idx++) {
+    ASSERT_OK(this->UpdateTestRow(&writer, row_idx, row_idx));
+  }
+
+  // Compact all of the rowsets. This will cause GC of tablet history.
+  for (int rowset_id = 0; rowset_id < 3; rowset_id++) {
+    ASSERT_OK(this->tablet()->CompactWorstDeltas(RowSet::MAJOR_DELTA_COMPACTION));
+  }
+
+  // TODO: Now try to read from the past.
+
+  // Sleep again.
+  SleepFor(MonoDelta::FromSeconds(2));
+
+  // Delete all of the rows in the tablet.
+  for (int row_idx = 0; row_idx < max_rows; row_idx++) {
+    ASSERT_OK(this->DeleteTestRow(&writer, row_idx));
+  }
+
+  // Compact all of the rowsets. This will cause GC of tablet history.
+  for (int rowset_id = 0; rowset_id < 3; rowset_id++) {
+    ASSERT_OK(this->tablet()->CompactWorstDeltas(RowSet::MAJOR_DELTA_COMPACTION));
+  }
+
+  // TODO: Now try to read from the past.
+
+  // TODO: Now check the on-disk tablet size. The tablet size should be 0.
+  size_t size = this->tablet()->EstimateOnDiskSize();
+  ASSERT_EQ(0, size);
 }
 
 enum MutationType {

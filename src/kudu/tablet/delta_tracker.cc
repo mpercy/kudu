@@ -221,6 +221,7 @@ Status DeltaTracker::CompactStores(int start_idx, int end_idx) {
                 &compacted_stores, &compacted_blocks));
 
   // Update delta_stores_, removing the compacted delta files and inserted the new
+  // TODO: What about the UNDOs?
   RETURN_NOT_OK(AtomicUpdateStores(compacted_stores, { new_block_id }, REDO));
   LOG(INFO) << "Opened delta block for read: " << new_block_id.ToString();
 

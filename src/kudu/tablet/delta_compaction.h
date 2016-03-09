@@ -56,7 +56,8 @@ class MajorDeltaCompaction {
       FsManager* fs_manager, const Schema& base_schema, CFileSet* base_data,
       std::shared_ptr<DeltaIterator> delta_iter,
       std::vector<std::shared_ptr<DeltaStore> > included_stores,
-      const std::vector<ColumnId>& col_ids);
+      const std::vector<ColumnId>& col_ids,
+      Timestamp ts);
   ~MajorDeltaCompaction();
 
   // Executes the compaction.
@@ -102,6 +103,8 @@ class MajorDeltaCompaction {
 
   // The column ids to compact.
   const std::vector<ColumnId> column_ids_;
+
+  const Timestamp ts_;
 
   // Inputs:
   //-----------------

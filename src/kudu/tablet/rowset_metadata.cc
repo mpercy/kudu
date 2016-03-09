@@ -157,8 +157,8 @@ Status RowSetMetadata::CommitUpdate(const RowSetMetadataUpdate& update) {
   {
     lock_guard<LockType> l(&lock_);
 
-    for (const RowSetMetadataUpdate::ReplaceDeltaBlocks rep :
-                  update.replace_redo_blocks_) {
+    // TODO: This loopy thing is wacky. Somebody explain this shit to me.
+    for (const RowSetMetadataUpdate::ReplaceDeltaBlocks& rep : update.replace_redo_blocks_) {
       CHECK(!rep.to_remove.empty());
 
       auto start_it = std::find(redo_delta_blocks_.begin(),

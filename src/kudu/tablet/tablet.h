@@ -42,6 +42,8 @@
 #include "kudu/util/status.h"
 #include "kudu/util/throttler.h"
 
+DECLARE_int32(tablet_history_max_age_sec);
+
 namespace kudu {
 
 class MemTracker;
