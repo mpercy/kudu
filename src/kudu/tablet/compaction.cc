@@ -38,6 +38,10 @@
 #include "kudu/tablet/transactions/write_transaction.h"
 #include "kudu/util/debug/trace_event.h"
 
+DEFINE_int32(tablet_history_max_age_sec, 604800,
+             "Number of seconds to retain tablet history. Reads initiated at a "
+             "snapshot that is older than this age will be rejected.");
+
 using std::shared_ptr;
 using std::unordered_set;
 using strings::Substitute;
@@ -597,6 +601,7 @@ void RowSetsInCompaction::DumpToLog() const {
 }
 
 
+// TODO: Implement KUDU-236 GC
 Status ApplyMutationsAndGenerateUndos(const MvccSnapshot& snap,
                                       const CompactionInputRow& src_row,
                                       const Schema* base_schema,
