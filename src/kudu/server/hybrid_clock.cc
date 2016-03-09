@@ -300,6 +300,10 @@ bool HybridClock::SupportsExternalConsistencyMode(ExternalConsistencyMode mode) 
   return true;
 }
 
+bool HybridClock::HasPhysicalComponent() {
+  return true;
+}
+
 Status HybridClock::WaitUntilAfter(const Timestamp& then_latest,
                                    const MonoTime& deadline) {
   TRACE_EVENT0("clock", "HybridClock::WaitUntilAfter");

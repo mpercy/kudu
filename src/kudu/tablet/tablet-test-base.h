@@ -305,8 +305,9 @@ typedef ::testing::Types<
 template<class TESTSETUP>
 class TabletTestBase : public KuduTabletTest {
  public:
-  TabletTestBase() :
-    KuduTabletTest(TESTSETUP::CreateSchema()),
+  TabletTestBase(TabletHarness::Options::ClockType clock_type =
+                 TabletHarness::Options::ClockType::LOGICAL_CLOCK) :
+    KuduTabletTest(TESTSETUP::CreateSchema(), clock_type),
     setup_(),
     max_rows_(setup_.GetMaxRows()),
     arena_(1024, 4*1024*1024)

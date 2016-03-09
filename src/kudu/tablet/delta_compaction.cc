@@ -60,10 +60,12 @@ MajorDeltaCompaction::MajorDeltaCompaction(
     FsManager* fs_manager, const Schema& base_schema, CFileSet* base_data,
     shared_ptr<DeltaIterator> delta_iter,
     vector<shared_ptr<DeltaStore> > included_stores,
-    const vector<ColumnId>& col_ids)
+    const vector<ColumnId>& col_ids,
+    const HistoryGCOpts& history_gc_opts)
     : fs_manager_(fs_manager),
       base_schema_(base_schema),
       column_ids_(col_ids),
+      history_gc_opts_(history_gc_opts),
       base_data_(base_data),
       included_stores_(std::move(included_stores)),
       delta_iter_(std::move(delta_iter)),
@@ -144,16 +146,19 @@ Status MajorDeltaCompaction::FlushRowSetAndDeltas() {
       Mutation* new_redos_head = nullptr;
 
       bool is_garbage_collected;
+      bool is_history_truncated;
 
       RETURN_NOT_OK(ApplyMutationsAndGenerateUndos(snap,
                                                    input_row,
+                                                   history_gc_opts_,
                                                    &base_schema_,
                                                    &new_undos_head,
                                                    &new_redos_head,
                                                    &arena,
                                                    &dst_row,
                                                    &is_garbage_collected,
-                                                   &num_rows_history_truncated));
+                                                   &is_history_truncated));
+      num_rows_history_truncated += is_history_truncated;
 
       VLOG(2) << "Output Row: " << dst_row.schema()->DebugRow(dst_row)
         << " Undo Mutations: " << Mutation::StringifyMutationList(partial_schema_, new_undos_head)

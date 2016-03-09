@@ -31,6 +31,20 @@ namespace tablet {
 struct CompactionInputRow;
 class WriteTransactionState;
 
+// Options related to tablet history garbage collection.
+struct HistoryGCOpts {
+  enum GCHistory {
+    GC_HISTORY,
+    NO_GC_HISTORY
+  };
+  HistoryGCOpts(GCHistory do_gc, Timestamp ahm)
+      : do_history_gc(do_gc),
+        ancient_history_mark(ahm) {
+  }
+  const GCHistory do_history_gc; // Should we perform history GC?
+  const Timestamp ancient_history_mark; // If so, what's the AHM?
+};
+
 // Interface for an input feeding into a compaction or flush.
 class CompactionInput {
  public:
@@ -111,6 +125,8 @@ class RowSetsInCompaction {
 };
 
 // One row yielded by CompactionInput::PrepareBlock.
+// Looks like this (assuming n UNDO records and m REDO records):
+// UNDO_n <- ... <- UNDO_1 <- UNDO_head <- row -> REDO_head -> REDO_1 -> ... -> REDO_m
 struct CompactionInputRow {
   // The compaction input base row.
   RowBlockRow row;
@@ -129,17 +145,30 @@ struct CompactionInputRow {
 //                            belonging to 'dst_row'. Those that don't belong to that schema are
 //                            ignored.
 //
-// Currently, 'is_garbage_collected' is always false (KUDU-236).
+// 'history_gc_enabled': Whether historical records prior to the ancient
+// history mark should be garbage-collected (deleted).
+//
+// 'ancient_history_mark': A timestamp prior to which no UNDO deltas will be
+// preserved.
+//
+// 'is_garbage_collected': Set to true if the row was marked as deleted prior
+// to the ancient history mark, with no reinsertions after that. In such a
+// case, all traces of the row should be removed from disk by the caller.
+//
+// 'is_history_truncated': Set to true if this row had a "reinsert after
+// delete" that was compacted, resulting in the loss of history prior to the
+// reinsert. This is related to a known issue that will eventually be fixed.
+// See KUDU-237.
 Status ApplyMutationsAndGenerateUndos(const MvccSnapshot& snap,
                                       const CompactionInputRow& src_row,
+                                      HistoryGCOpts history_gc_opts,
                                       const Schema* base_schema,
                                       Mutation** new_undo_head,
                                       Mutation** new_redo_head,
                                       Arena* arena,
                                       RowBlockRow* dst_row,
                                       bool* is_garbage_collected,
-                                      uint64_t* num_rows_history_truncated);
-
+                                      bool* is_history_truncated);
 
 // Iterate through this compaction input, flushing all rows to the given RollingDiskRowSetWriter.
 // The 'snap' argument should match the MvccSnapshot used to create the compaction input.
@@ -148,6 +177,7 @@ Status ApplyMutationsAndGenerateUndos(const MvccSnapshot& snap,
 // no longer be useful.
 Status FlushCompactionInput(CompactionInput *input,
                             const MvccSnapshot &snap,
+                            HistoryGCOpts history_gc_opts,
                             RollingDiskRowSetWriter *out);
 
 // Iterate through this compaction input, finding any mutations which came between

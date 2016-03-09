@@ -65,6 +65,7 @@ namespace tablet {
 
 class AlterSchemaTransactionState;
 class CompactionPolicy;
+struct HistoryGCOpts;
 class MemRowSet;
 class MvccSnapshot;
 struct RowOp;
@@ -346,6 +347,9 @@ class Tablet {
   // TODO: Handle MVCC to support MemRowSet and handle deltas in DeltaMemStore
   Status DoMajorDeltaCompaction(const std::vector<ColumnId>& column_ids,
                                 std::shared_ptr<RowSet> input_rowset);
+
+  // Calculates history GC options based on properties of the Clock implementation.
+  HistoryGCOpts GetHistoryGCOpts() const;
 
   // Method used by tests to retrieve all rowsets of this table. This
   // will be removed once code for selecting the appropriate RowSet is

@@ -61,6 +61,7 @@ class CFileSet;
 class DeltaFileWriter;
 class DeltaStats;
 class DeltaTracker;
+struct HistoryGCOpts;
 class MultiColumnWriter;
 class Mutation;
 class OperationResultPB;
@@ -346,7 +347,7 @@ class DiskRowSet : public RowSet {
   double DeltaStoresCompactionPerfImprovementScore(DeltaCompactionType type) const OVERRIDE;
 
   // Major compacts all the delta files for all the columns.
-  Status MajorCompactDeltaStores();
+  Status MajorCompactDeltaStores(const HistoryGCOpts& history_gc_opts);
 
   boost::mutex *compact_flush_lock() OVERRIDE {
     return &compact_flush_lock_;
@@ -382,10 +383,12 @@ class DiskRowSet : public RowSet {
 
   // Create a new major delta compaction object to compact the specified columns.
   Status NewMajorDeltaCompaction(const std::vector<ColumnId>& col_ids,
+                                 const HistoryGCOpts& history_gc_opts,
                                  gscoped_ptr<MajorDeltaCompaction>* out) const;
 
   // Major compacts all the delta files for the specified columns.
-  Status MajorCompactDeltaStoresWithColumnIds(const std::vector<ColumnId>& col_ids);
+  Status MajorCompactDeltaStoresWithColumnIds(const std::vector<ColumnId>& col_ids,
+                                              const HistoryGCOpts& history_gc_opts);
 
   std::shared_ptr<RowSetMetadata> rowset_metadata_;
 

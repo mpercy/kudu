@@ -62,6 +62,10 @@ static const char *kRowKeyFormat = "hello %08d";
 static const size_t kLargeRollThreshold = 1024 * 1024 * 1024; // 1GB
 static const size_t kSmallRollThreshold = 1024; // 1KB
 
+HistoryGCOpts NoHistoryGC() {
+  return HistoryGCOpts(HistoryGCOpts::NO_GC_HISTORY, Timestamp::kInvalidTimestamp);
+}
+
 class TestCompaction : public KuduRowSetTest {
  public:
   TestCompaction()
@@ -208,7 +212,7 @@ class TestCompaction : public KuduRowSetTest {
                                 BloomFilterSizing::BySizeAndFPRate(32*1024, 0.01f),
                                 roll_threshold);
     ASSERT_OK(rsw.Open());
-    ASSERT_OK(FlushCompactionInput(input, snap, &rsw));
+    ASSERT_OK(FlushCompactionInput(input, snap, NoHistoryGC(), &rsw));
     ASSERT_OK(rsw.Finish());
 
     vector<shared_ptr<RowSetMetadata> > metas;
@@ -378,7 +382,7 @@ class TestCompaction : public KuduRowSetTest {
                                     BloomFilterSizing::BySizeAndFPRate(32 * 1024, 0.01f),
                                     1024 * 1024); // 1 MB
       ASSERT_OK(rdrsw.Open());
-      ASSERT_OK(FlushCompactionInput(compact_input.get(), merge_snap, &rdrsw));
+      ASSERT_OK(FlushCompactionInput(compact_input.get(), merge_snap, NoHistoryGC(), &rdrsw));
       ASSERT_OK(rdrsw.Finish());
     }
   }

@@ -622,8 +622,6 @@ TYPED_TEST(TestTablet, TestMultipleUpdates) {
   ASSERT_EQ(this->setup_.FormatDebugRow(1, 0, false), out_rows[1]);
 }
 
-
-
 TYPED_TEST(TestTablet, TestCompaction) {
   uint64_t max_rows = this->ClampRowCount(FLAGS_testcompaction_num_rows);
 
