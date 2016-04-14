@@ -44,7 +44,7 @@ class RandomAccessFile;
 class SequentialFile;
 class Slice;
 class Status;
-class WritableFile;
+class RWFile;
 
 namespace pb_util {
 
@@ -90,47 +90,84 @@ Status WritePBToPath(Env* env, const std::string& path, const MessageLite& msg, 
 void TruncateFields(google::protobuf::Message* message, int max_len);
 
 // A protobuf "container" has the following format (all integers in
-// little-endian byte order):
+// little-endian byte order).
 //
+// <file header>
+// <1 or more records>
 //
+// NOTE: Versions 1 and 2 of the record format.
+//
+//    Version 2 of the file format differs from version 1 in the following ways:
+//    * Version 2 has a file header checksum.
+//    * Version 2 has separate checksums for the record length and record data
+//      fields.
+//
+// File header format
+// ------------------
+//
+// Each protobuf container file contains a file header identifying the file.
+// This includes:
 //
 // magic number: 8 byte string identifying the file format.
 //
-//               Included so that we have a minimal guarantee that this file is
-//               of the type we expect and that we are not just reading garbage.
+//    Included so that we have a minimal guarantee that this file is of the
+//    type we expect and that we are not just reading garbage.
 //
 // container_version: 4 byte unsigned integer indicating the "version" of the
-//                    container format. Must be set to 1 at this time.
+//                    container format. May be set to 1 or 2.
 //
-//                    Included so that this file format may be extended at some
-//                    later date while maintaining backwards compatibility.
+//    Included so that this file format may be extended at some later date
+//    while maintaining backwards compatibility.
 //
+// file_header_checksum (version 2+ only): 4 byte unsigned integer with a CRC32C
+//                                         of the magic and version fields.
 //
-// The remaining container fields are repeated (in a group) for each protobuf message.
+//    Included so that we can validate the container version number.
 //
+// The remaining container fields are considered part of a "record". There may
+// be 1 or more records in a valid protobuf container file.
 //
-// data size: 4 byte unsigned integer indicating the size of the encoded data.
+// Record format
+// -------------
 //
-//            Included because PB messages aren't self-delimiting, and thus
-//            writing a stream of messages to the same file requires
-//            delimiting each with its size.
+// data length: 4 byte unsigned integer indicating the size of the encoded data.
 //
-//            See https://developers.google.com/protocol-buffers/docs/techniques?hl=zh-cn#streaming
-//            for more details.
+//    Included because PB messages aren't self-delimiting, and thus
+//    writing a stream of messages to the same file requires
+//    delimiting each with its size.
+//
+//    See https://developers.google.com/protocol-buffers/docs/techniques?hl=zh-cn#streaming
+//    for more details.
+//
+// length checksum (version 2+ only): 4-byte unsigned integer containing the
+//                                    CRC32C checksum of "data length".
+//
+//    Included so that we may discern the difference between a truncated file
+//    and a corrupted length field.
 //
 // data: "size" bytes of protobuf data encoded according to the schema.
 //
-//       Our payload.
+//    Our payload.
 //
-// checksum: 4 byte unsigned integer containing the CRC32C checksum of "data".
+// data checksum: 4 byte unsigned integer containing the CRC32C checksum of "data".
 //
-//           Included to ensure validity of the data on-disk.
+//    Included to ensure validity of the data on-disk.
+//    Note: In version 1 of the file format, this is a checksum of both the
+//    "data length" and "data" fields. In versions >= 1, this is only a
+//    checksum of the "data" field.
 //
-// Every container must have at least one protobuf message: the
-// supplemental header. It includes additional container-level information.
-// See pb_util.proto for details. As a containerized PB message, the header
-// is protected by a CRC32C checksum like any other message.
+// Supplemental header
+// -------------------
 //
+// A valid container must have at least one protobuf message, the first of
+// which is known as the "supplemental header". The supplemental header
+// contains additional container-level information, including the protobuf
+// schema used for the records following it. See pb_util.proto for details. As
+// a containerized PB message, the supplemental header is protected by a CRC32C
+// checksum like any other message.
+//
+// Error detection and tolerance
+// -----------------------------
 //
 // It is worth describing the kinds of errors that can be detected by the
 // protobuf container and the kinds that cannot.
@@ -139,17 +176,45 @@ void TruncateFields(google::protobuf::Message* message, int max_len);
 // they won't detect the disappearance or reordering of entire protobuf
 // messages, which can happen if a range of the file is collapsed (see
 // man fallocate(2)) or if the file is otherwise manually manipulated.
-// Moreover, the checksums do not protect against corruption in the data
-// size fields, though that is mitigated by validating each data size
-// against the remaining number of bytes in the container.
 //
-// Additionally, the container does not include footers or periodic
-// checkpoints. As such, it will not detect if entire protobuf messages
-// are truncated.
+// In version 1, the checksums do not protect against corruption in the data
+// size fields. However, version 2 of the format resolves that problem. The
+// benefit is that version 2 files can tell the difference between a record
+// with a corrupted length field and a record that was only partially written.
+// See ReadablePBContainerFile::ReadNextPB() for discussion on how this
+// difference is expressed via the API.
 //
-// That said, all corruption or truncation of the magic number or the
-// container version will be detected, as will most corruption/truncation
-// of the data size, data, and checksum (subject to CRC32 limitations).
+// In version 1 of the format, corruption of the version field in the file
+// header is not detectable. However, version 2 of the format addresses that
+// limitation as well.
+//
+// Corruption of the protobuf data itself is detected in all versions of the
+// file format (subject to CRC32 limitations).
+//
+// The container does not include footers or periodic checkpoints. As such, it
+// will not detect if entire records are truncated.
+//
+// The design and implementation relies on data ordering guarantees provided by
+// the file system to ensure that bytes are written to a file before the file
+// metadata (file size) is updated. A partially-written record (the result of a
+// failed append) is identified by one of the following criteria:
+// 1. Too-few bytes remain in the file to constitute a valid record. For
+//    version 2, that would be fewer than 12 bytes (data len, data len
+//    checksum, and data checksum), or
+// 2. Assuming a record's data length field is valid, then fewer bytes remain
+//    in the file than are specified in the data length field (plus enough for
+//    checksums).
+// In the above scenarios, it is assumed that the system faulted while in the
+// middle of appending a record, and it is considered safe to truncate the file
+// at the beginning of the partial record.
+//
+// If filesystem preallocation is used (at the time of this writing, the
+// implementation does not support preallocation) then even version 2 of the
+// format cannot safely support culling trailing partially-written records.
+// This is because it is not possible to reliably tell the difference between a
+// partially-written record that did not complete fsync (resulting in a bad
+// checksum) vs. a record that successfully was written to disk but then fell
+// victim to bit-level disk corruption. See also KUDU-1414.
 //
 // These tradeoffs in error detection are reasonable given the failure
 // environment that Kudu operates within. We tolerate failures such as
@@ -157,14 +222,17 @@ void TruncateFields(google::protobuf::Message* message, int max_len);
 // failure, but not failures like runaway processes mangling data files
 // in arbitrary ways or attackers crafting malicious data files.
 //
-// The one kind of failure that clients must handle is truncation of entire
-// protobuf messages (see above). The protobuf container will not detect
-// these failures, so clients must tolerate them in some way.
+// In short, no version of the file format will not detect truncation of entire
+// protobuf records. Version 2 relies on ordered data flushing semantics for
+// automatic recoverability from partial record writes. Version 1 of the file
+// format cannot support automatic recoverability from partial record writes.
 //
 // For further reading on what files might look like following a normal
-// filesystem failure, see:
+// filesystem failure or disk corruption, and the likelihood of various types
+// of disk errors, see the following papers:
 //
 // https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-pillai.pdf
+// https://www.usenix.org/legacy/event/fast08/tech/full_papers/bairavasundaram/bairavasundaram.pdf
 
 // Protobuf container file opened for writing.
 //
@@ -175,7 +243,7 @@ class WritablePBContainerFile {
  public:
 
   // Initializes the class instance; writer must be open.
-  explicit WritablePBContainerFile(gscoped_ptr<WritableFile> writer);
+  explicit WritablePBContainerFile(gscoped_ptr<RWFile> writer);
 
   // Closes the container if not already closed.
   ~WritablePBContainerFile();
@@ -185,6 +253,17 @@ class WritablePBContainerFile {
   // 'msg' need not be populated; its type is used to "lock" the container
   // to a particular protobuf message type in Append().
   Status Init(const google::protobuf::Message& msg);
+
+  // Reopen a previously initialized protobuf container file with the specified version.
+  // Reopen() determines the initial end-of-file write offset by reading the
+  // length of the file at the time it is called. Because
+  // WritablePBContainerFile caches the offset instead of constantly calling
+  // stat() on the file, if the length of the file is changed externally then
+  // Reopen() must be called again for the writer to see the change.
+  // For example, if a file is truncated, and you wish to continue writing from
+  // that point forward, you must call Reopen() again for the writer to reset
+  // its write offset to the new end of file location.
+  Status Reopen();
 
   // Writes a protobuf message to the container, beginning with its size
   // and ending with its CRC32 checksum.
@@ -205,7 +284,12 @@ class WritablePBContainerFile {
   Status Close();
 
  private:
+  friend class TestPBUtil;
   FRIEND_TEST(TestPBUtil, TestPopulateDescriptorSet);
+
+  // Set the file format version. Only used for testing.
+  // Must be called before Init().
+  Status SetVersionForTests(int version);
 
   // Write the protobuf schemas belonging to 'desc' and all of its
   // dependencies to 'output'.
@@ -219,9 +303,17 @@ class WritablePBContainerFile {
   // to aid in deserialization.
   Status AppendMsgToBuffer(const google::protobuf::Message& msg, faststring* buf);
 
+  // Append bytes to the file.
+  Status AppendBytes(const Slice& data);
+
+  bool initialized_;
   bool closed_;
 
-  gscoped_ptr<WritableFile> writer_;
+  // Current write offset into the file.
+  uint64_t offset_;
+  int version_;
+
+  gscoped_ptr<RWFile> writer_;
 };
 
 // Protobuf container file opened for reading.
@@ -238,10 +330,21 @@ class ReadablePBContainerFile {
   ~ReadablePBContainerFile();
 
   // Reads the header information from the container and validates it.
-  Status Init();
+  Status Open();
 
   // Reads a protobuf message from the container, validating its size and
   // data using a CRC32 checksum.
+  // Return values:
+  // * If there are no more records in the file, returns Status::EndOfFile.
+  // * If there is a partial record, but it is not long enough to be a full
+  //   record or the written length of the record is less than the remaining
+  //   bytes in the file, returns Status::Incomplete. If Status::Incomplete
+  //   is returned, calling offset() will return the point in the file where
+  //   the invalid partial record begins. In order to append additional records
+  //   to the file, the file must first be truncated at that offset.
+  //   Note: Version 1 of this file format will never return
+  //   Status::Incomplete() from this method.
+  // * If a corrupt record is encountered, returns Status::Corruption.
   Status ReadNextPB(google::protobuf::Message* msg);
 
   // Dumps any unread protobuf messages in the container to 'os'. Each
@@ -255,28 +358,24 @@ class ReadablePBContainerFile {
 
   // Expected PB type and schema for each message to be read.
   //
-  // Only valid after a successful call to Init().
+  // Only valid after a successful call to Open().
   const std::string& pb_type() const { return pb_type_; }
   const google::protobuf::FileDescriptorSet* protos() const {
     return protos_.get();
   }
 
+  // Return the protobuf container file format version.
+  // Open() must be called first.
+  int version() const;
+
+  // Return current read offset. File must be open.
+  uint64_t offset() const;
+
  private:
-  enum EofOK {
-    EOF_OK,
-    EOF_NOT_OK
-  };
-
-  // Reads exactly 'length' bytes from the container file into 'scratch',
-  // validating the correctness of the read both before and after and
-  // returning a slice of the bytes in 'result'.
-  //
-  // If 'eofOK' is EOF_OK, an EOF is returned as-is. Otherwise, it is
-  // considered to be an invalid short read and returned as an error.
-  Status ValidateAndRead(size_t length, EofOK eofOK,
-                         Slice* result, gscoped_ptr<uint8_t[]>* scratch);
-
-  size_t offset_;
+  bool initialized_;
+  bool closed_;
+  int version_;
+  uint64_t offset_;
 
   // The fully-qualified PB type name of the messages in the container.
   std::string pb_type_;
