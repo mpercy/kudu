@@ -486,7 +486,6 @@ class PosixWritableFile : public WritableFile {
 };
 
 class PosixRWFile : public RWFile {
-// is not employed.
  public:
   PosixRWFile(string fname, int fd, bool sync_on_close)
       : filename_(std::move(fname)),
@@ -508,6 +507,7 @@ class PosixRWFile : public RWFile {
     while (rem > 0) {
       ssize_t r = pread(fd_, dst, rem, offset);
       if (r < 0) {
+        if (errno == EINTR) continue; // Retry on EINTR.
         // An error: return a non-ok status.
         return IOError(filename_, errno);
       }
@@ -739,16 +739,12 @@ class PosixEnv : public Env {
                                      std::string* created_filename,
                                      gscoped_ptr<WritableFile>* result) OVERRIDE {
     TRACE_EVENT1("io", "PosixEnv::NewTempWritableFile", "template", name_template);
-    ThreadRestrictions::AssertIOAllowed();
-    gscoped_ptr<char[]> fname(new char[name_template.size() + 1]);
-    ::snprintf(fname.get(), name_template.size() + 1, "%s", name_template.c_str());
-    const int fd = ::mkstemp(fname.get());
-    if (fd < 0) {
-      return IOError(Substitute("Call to mkstemp() failed on name template $0", name_template),
-                     errno);
-    }
-    *created_filename = fname.get();
-    return InstantiateNewWritableFile(*created_filename, fd, opts, result);
+    int fd;
+    string tmp_filename;
+    RETURN_NOT_OK(MkTmpFile(name_template, &fd, &tmp_filename));
+    RETURN_NOT_OK(InstantiateNewWritableFile(tmp_filename, fd, opts, result));
+    created_filename->swap(tmp_filename);
+    return Status::OK();
   }
 
   virtual Status NewRWFile(const string& fname,
@@ -763,6 +759,15 @@ class PosixEnv : public Env {
     int fd;
     RETURN_NOT_OK(DoOpen(fname, opts.mode, &fd));
     result->reset(new PosixRWFile(fname, fd, opts.sync_on_close));
+    return Status::OK();
+  }
+
+  virtual Status NewTempRWFile(const RWFileOptions& opts, const std::string& name_template,
+                               std::string* created_filename, gscoped_ptr<RWFile>* res) OVERRIDE {
+    TRACE_EVENT1("io", "PosixEnv::NewTempRWFile", "template", name_template);
+    int fd;
+    RETURN_NOT_OK(MkTmpFile(name_template, &fd, created_filename));
+    res->reset(new PosixRWFile(*created_filename, fd, opts.sync_on_close));
     return Status::OK();
   }
 
@@ -1113,6 +1118,20 @@ class PosixEnv : public Env {
       if (fts) { fts_close(fts); }
     }
   };
+
+  Status MkTmpFile(const string& name_template, int* fd, string* created_filename) {
+    ThreadRestrictions::AssertIOAllowed();
+    gscoped_ptr<char[]> fname(new char[name_template.size() + 1]);
+    ::snprintf(fname.get(), name_template.size() + 1, "%s", name_template.c_str());
+    int created_fd = mkstemp(fname.get());
+    if (created_fd < 0) {
+      return IOError(Substitute("Call to mkstemp() failed on name template $0", name_template),
+                     errno);
+    }
+    *fd = created_fd;
+    *created_filename = fname.get();
+    return Status::OK();
+  }
 
   Status InstantiateNewWritableFile(const std::string& fname,
                                     int fd,
