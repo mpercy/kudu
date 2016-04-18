@@ -435,6 +435,11 @@ class InMemoryEnv : public EnvWrapper {
     // Unreachable.
   }
 
+  virtual Status NewTempRWFile(const RWFileOptions& opts, const std::string& name_template,
+                               std::string* created_filename, gscoped_ptr<RWFile>* res) OVERRIDE {
+    return Status::NotSupported("Not implemented");
+  }
+
   virtual bool FileExists(const std::string& fname) OVERRIDE {
     MutexLock lock(mutex_);
     return file_map_.find(fname) != file_map_.end();
