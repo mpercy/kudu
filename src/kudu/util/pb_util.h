@@ -189,8 +189,6 @@ void TruncateFields(google::protobuf::Message* message, int max_len);
 //
 // https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-pillai.pdf
 
-enum class IsEofOk;
-
 // Protobuf container file opened for writing.
 //
 // Can be built around an existing file or a completely new file.
@@ -291,6 +289,17 @@ class ReadablePBContainerFile {
 
   // Reads a protobuf message from the container, validating its size and
   // data using a CRC32 checksum.
+  // Return values:
+  // * If there are no more records in the file, returns Status::EndOfFile.
+  // * If there is a partial record, but it is not long enough to be a full
+  //   record or the written length of the record is less than the remaining
+  //   bytes in the file, returns Status::Incomplete. If Status::Incomplete
+  //   is returned, calling offset() will return the point in the file where
+  //   the invalid partial record begins. In order to append additional records
+  //   to the file, the file must first be truncated at that offset.
+  //   Note: Version 1 of this file format will never return
+  //   Status::Incomplete() from this method.
+  // * If a corrupt record is encountered, returns Status::Corruption.
   Status ReadNextPB(google::protobuf::Message* msg);
 
   // Dumps any unread protobuf messages in the container to 'os'. Each
@@ -314,10 +323,10 @@ class ReadablePBContainerFile {
   // Open() must be called first.
   int version() const;
 
- private:
-  Status ValidateAndRead(size_t length, IsEofOk eof_allowed,
-                         Slice* result, gscoped_ptr<uint8_t[]>* scratch);
+  // Return current read offset. File must be open.
+  uint64_t offset() const;
 
+ private:
   bool initialized_;
   bool closed_;
   int version_;
