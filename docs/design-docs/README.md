@@ -34,4 +34,5 @@ made.
 | [Maintenance operation scheduling](triggering-maintenance-ops.md) | Master, Tablet Server | N/A |
 | [C++ client design and impl. details](cpp-client.md) | Client | N/A |
 | [(old) Heartbeating between tservers and multiple masters](old-multi-master-heartbeating.md) | Master | [gerrit](http://gerrit.cloudera.org:8080/2495) |
-| [Scan Token API](scan-tokens.md) | Client | [gerrit](http://gerrit.cloudera.org:8080/2443) |
+| [Scan token API](scan-tokens.md) | Client | [gerrit](http://gerrit.cloudera.org:8080/2443) |
+| [Tablet history garbage collection](tablet-history-gc.md) | Tablet | [gerrit](http://gerrit.cloudera.org:8080/2853) |
