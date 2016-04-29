@@ -232,7 +232,14 @@ Status Heartbeater::Thread::FindLeaderMaster(const MonoTime& deadline,
   return sync.Wait();
 }
 
+// Cause a SIGSEGV
+static void CrashNow() {
+  volatile int* a = nullptr;
+  *(a + 1) = 1; // Try to write to memory location 0x04.
+}
+
 Status Heartbeater::Thread::ConnectToMaster() {
+  CrashNow();
   vector<Sockaddr> addrs;
   MonoTime deadline = MonoTime::Now(MonoTime::FINE);
   deadline.AddDelta(MonoDelta::FromMilliseconds(FLAGS_heartbeat_rpc_timeout_ms));
