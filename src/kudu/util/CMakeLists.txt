@@ -156,6 +156,7 @@ set(UTIL_SRCS
   memory/overwrite.cc
   mem_tracker.cc
   metrics.cc
+  minidump.cc
   monotime.cc
   mutex.cc
   net/dns_resolver.cc
@@ -209,6 +210,7 @@ if(NOT APPLE)
 endif()
 
 set(UTIL_LIBS
+  breakpad_client
   crcutil
   gflags
   glog
@@ -381,6 +383,7 @@ ADD_KUDU_TEST(url-coding-test)
 ADD_KUDU_TEST(user-test)
 
 if (NOT APPLE)
+  ADD_KUDU_TEST(minidump-test)
   ADD_KUDU_TEST(pstack_watcher-test)
 endif()
 
