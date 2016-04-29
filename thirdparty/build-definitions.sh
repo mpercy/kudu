@@ -534,6 +534,20 @@ build_crcutil() {
   popd
 }
 
+build_breakpad() {
+  BREAKPAD_BDIR=$TP_BUILD_DIR/$BREAKPAD_NAME$MODE_SUFFIX
+  mkdir -p $BREAKPAD_BDIR
+  pushd $BREAKPAD_BDIR
+
+  CFLAGS="$EXTRA_CFLAGS" \
+    CXXFLAGS="$EXTRA_CXXFLAGS" \
+    LDFLAGS="$EXTRA_LDFLAGS" \
+    LIBS="$EXTRA_LIBS" \
+    $BREAKPAD_SOURCE/configure --prefix=$PREFIX
+  make -j$PARALLEL install
+  popd
+}
+
 build_cpplint() {
   # Copy cpplint tool into bin directory
   cp $GSG_SOURCE/cpplint/cpplint.py $PREFIX/bin/cpplint.py

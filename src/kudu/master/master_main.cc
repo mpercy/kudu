@@ -23,6 +23,7 @@
 #include "kudu/util/flags.h"
 #include "kudu/util/init.h"
 #include "kudu/util/logging.h"
+#include "kudu/util/minidump.h"
 #include "kudu/util/version_info.h"
 
 using kudu::master::Master;
@@ -56,6 +57,7 @@ static int MasterMain(int argc, char** argv) {
   }
   std::string nondefault_flags = GetNonDefaultFlags(default_flags);
   InitGoogleLoggingSafe(argv[0]);
+  CHECK_OK(RegisterMinidump(argv[0]));
 
   LOG(INFO) << "Master server non-default flags:\n"
             << nondefault_flags << '\n'

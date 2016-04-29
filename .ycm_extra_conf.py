@@ -68,6 +68,8 @@ flags = [
 'thirdparty/installed/common/include',
 '-isystem',
 'thirdparty/installed/uninstrumented/include',
+'-isystem',
+'thirdparty/installed/uninstrumented/include/breakpad',
 ]
 
 # Set this to the absolute path to the folder (NOT the file!) containing the

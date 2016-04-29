@@ -91,6 +91,7 @@ else
       "trace-viewer") F_TRACE_VIEWER=1 ;;
       "nvml")         F_NVML=1 ;;
       "boost")        F_BOOST=1 ;;
+      "breakpad")     F_BREAKPAD=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -280,6 +281,10 @@ if [ -n "$F_UNINSTRUMENTED" -o -n "$F_CRCUTIL" ]; then
   build_crcutil
 fi
 
+if [ -n "$F_ALL" -o -n "$F_BREAKPAD" ]; then
+  build_breakpad
+fi
+
 restore_env
 
 ### Build dependencies with TSAN instrumentation
@@ -429,6 +434,10 @@ fi
 
 if [ -n "$F_TSAN" -o -n "$F_CRCUTIL" ]; then
   build_crcutil
+fi
+
+if [ -n "$F_ALL" -o -n "$F_BREAKPAD" ]; then
+  build_breakpad
 fi
 
 restore_env

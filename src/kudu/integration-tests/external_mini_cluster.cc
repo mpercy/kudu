@@ -633,6 +633,9 @@ Status ExternalDaemon::StartProcess(const vector<string>& user_flags) {
   // rely on forcefully cutting power to a machine or equivalent.
   argv.push_back("--never_fsync");
 
+  // Disable minidumps by default since many tests purposely inject faults.
+  argv.push_back("--enable_minidumps=false");
+
   // Disable log redaction.
   argv.push_back("--log_redact_user_data=false");
 

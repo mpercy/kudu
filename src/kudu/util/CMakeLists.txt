@@ -148,6 +148,7 @@ set(UTIL_SRCS
   memory/overwrite.cc
   mem_tracker.cc
   metrics.cc
+  minidump.cc
   monotime.cc
   mutex.cc
   net/dns_resolver.cc
@@ -204,6 +205,7 @@ if(NOT APPLE)
 endif()
 
 set(UTIL_LIBS
+  breakpad_client
   crcutil
   gflags
   glog

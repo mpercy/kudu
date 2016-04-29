@@ -241,6 +241,7 @@ if [ -n "$OS_LINUX" -a ! -d $NVML_SOURCE ]; then
   fetch_and_expand nvml-${NVML_VERSION}.tar.gz
 fi
 
+
 BOOST_PATCHLEVEL=1
 delete_if_wrong_patchlevel $BOOST_SOURCE $BOOST_PATCHLEVEL
 if [ ! -d $BOOST_SOURCE ]; then
@@ -263,6 +264,10 @@ needs_openssl_workaround() {
 if needs_openssl_workaround && [ ! -d "$OPENSSL_WORKAROUND_DIR" ] ; then
   echo Building on el6: installing OpenSSL from CentOS 6.4.
   $TP_DIR/install-openssl-el6-workaround.sh
+fi
+
+if [ ! -d "$BREAKPAD_DIR" ]; then
+  fetch_and_expand breakpad-${BREAKPAD_VERSION}.tar.gz
 fi
 
 echo "---------------"
