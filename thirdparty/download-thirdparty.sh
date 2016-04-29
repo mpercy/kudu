@@ -248,5 +248,13 @@ if [ -n "$OS_LINUX" -a ! -d $NVML_DIR ]; then
   fetch_and_expand nvml-${NVML_VERSION}.tar.gz
 fi
 
+if [ ! -d "$BREAKPAD_DIR" ]; then
+  fetch_and_expand breakpad-${BREAKPAD_VERSION}.tar.gz
+  pushd $BREAKPAD_DIR
+  autoreconf -fvi
+  popd
+fi
+
+
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"

@@ -288,6 +288,16 @@ build_crcutil() {
   make -j$PARALLEL install
 }
 
+build_breakpad() {
+  cd $BREAKPAD_DIR
+  CFLAGS="$EXTRA_CFLAGS" \
+    CXXFLAGS="$EXTRA_CXXFLAGS" \
+    LDFLAGS="$EXTRA_LDFLAGS" \
+    LIBS="$EXTRA_LIBS" \
+    ./configure --prefix=$PREFIX
+  make -j$PARALLEL install
+}
+
 build_boost_uuid() {
   # Copy boost_uuid into the include directory.
   # This is a header-only library which isn't present in some older versions of

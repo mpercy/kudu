@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <google_breakpad/client/linux/handler/exception_handler.h>
 #include <glog/logging.h>
 #include <iostream>
 
@@ -33,6 +34,12 @@ DECLARE_int32(webserver_port);
 namespace kudu {
 namespace tserver {
 
+static bool dumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
+                         void* context, bool succeeded) {
+  printf("MiniDump path: %s\n", descriptor.path());
+  return succeeded;
+}
+
 static int TabletServerMain(int argc, char** argv) {
   InitKuduOrDie();
 
@@ -48,6 +55,8 @@ static int TabletServerMain(int argc, char** argv) {
     return 1;
   }
   InitGoogleLoggingSafe(argv[0]);
+  google_breakpad::MinidumpDescriptor descriptor("/tmp");
+  google_breakpad::ExceptionHandler eh(descriptor, NULL, dumpCallback, NULL, true, -1);
 
   TabletServerOptions opts;
   TabletServer server(opts);

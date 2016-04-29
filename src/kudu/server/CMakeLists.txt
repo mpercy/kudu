@@ -89,7 +89,8 @@ target_link_libraries(server_process
   gutil
   krpc
   kudu_util
-  squeasel)
+  squeasel
+  breakpad_client)
 
 # This module depends on tcmalloc and profiler directly, so need to make
 # sure that they get linked in the right order.
