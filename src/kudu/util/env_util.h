@@ -39,6 +39,11 @@ Status OpenFileForRandom(Env *env, const std::string &path,
 Status OpenFileForSequential(Env *env, const std::string &path,
                              std::shared_ptr<SequentialFile> *file);
 
+// Returns Status::ServiceUnavailable if there is not sufficient disk space or
+// inodes to write 'bytes' bytes to the file system represented by 'path'.
+// Otherwise returns OK.
+Status AssertSufficientDiskSpace(Env *env, const std::string& path, int64_t bytes);
+
 // Read exactly 'n' bytes from the given file. If fewer than 'n' bytes
 // are read, returns an IOError. This differs from the underlying
 // RandomAccessFile::Read(), which may return a "short read".

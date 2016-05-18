@@ -21,6 +21,7 @@
 #include <deque>
 #include <gtest/gtest_prod.h>
 #include <memory>
+#include <queue>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -148,6 +149,18 @@ struct LogBlockManagerMetrics;
 // - Evaluate and implement a solution for data integrity (e.g. per-block
 //   checksum).
 
+// A thread-safe cache that indicates whether a root path is full or not.
+// Includes expiration of the items in the cache. Cache entries are never deleted.
+class FullDiskCache {
+ public:
+  bool IsRootFull(const std::string& root_path, MonoTime now, MonoTime* expires = nullptr) const;
+  void MarkRootFull(const std::string& root_path, MonoTime expires);
+
+ private:
+  mutable percpu_rwlock lock_;
+  std::unordered_map<std::string, MonoTime> cache_;
+};
+
 // The log-backed block manager.
 class LogBlockManager : public BlockManager {
  public:
@@ -198,6 +211,15 @@ class LogBlockManager : public BlockManager {
       BlockIdHash,
       BlockIdEqual,
       BlockAllocator> BlockMap;
+
+  typedef std::pair<internal::LogBlockContainer*, MonoTime> ExpiringContainerPair;
+
+  class ExpiringContainerPairGreaterThanFunctor {
+   public:
+    bool operator()(const ExpiringContainerPair& a, const ExpiringContainerPair& b) {
+      return b.second.ComesBefore(a.second);
+    }
+  };
 
   // Adds an as of yet unseen container to this block manager.
   void AddNewContainerUnlocked(internal::LogBlockContainer* container);
@@ -301,6 +323,14 @@ class LogBlockManager : public BlockManager {
   // Does not own the containers.
   std::deque<internal::LogBlockContainer*> available_containers_;
 
+  // Holds only those containers that would be available, were they not on
+  // disks that are past their capacity. This priority queue consists of pairs
+  // of containers and timestamps. Those timestamps represent the next time
+  // that we should check whether the disk is full. The top of the priority
+  // queue is the lowest timestamp.
+  std::priority_queue<ExpiringContainerPair, std::vector<ExpiringContainerPair>,
+                      ExpiringContainerPairGreaterThanFunctor> disk_full_containers_;
+
   // Tracks dirty container directories.
   //
   // Synced and cleared by SyncMetadata().
@@ -326,6 +356,8 @@ class LogBlockManager : public BlockManager {
   // so serves as a "work queue" for that particular disk.
   typedef std::unordered_map<std::string, ThreadPool*> ThreadPoolMap;
   ThreadPoolMap thread_pools_by_root_path_;
+
+  FullDiskCache full_disk_cache_;
 
   // For generating container names.
   ObjectIdGenerator oid_generator_;

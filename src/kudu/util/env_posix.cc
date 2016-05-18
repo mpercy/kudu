@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -987,6 +988,15 @@ class PosixEnv : public Env {
   virtual void SleepForMicroseconds(int micros) OVERRIDE {
     ThreadRestrictions::AssertWaitAllowed();
     SleepFor(MonoDelta::FromMicroseconds(micros));
+  }
+
+  virtual Status StatVfs(const std::string& path, struct statvfs* buf) OVERRIDE {
+    int ret;
+    RETRY_ON_EINTR(ret, statvfs(path.c_str(), buf));
+    if (ret == -1) {
+      return Status::IOError("statvfs: " + path, ErrnoToString(errno), errno);
+    }
+    return Status::OK();
   }
 
   virtual Status GetExecutablePath(string* path) OVERRIDE {

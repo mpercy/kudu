@@ -22,6 +22,8 @@
 #include "kudu/gutil/gscoped_ptr.h"
 #include "kudu/util/status.h"
 
+struct statvfs;
+
 namespace kudu {
 
 class FileLock;
@@ -206,6 +208,10 @@ class Env {
 
   // Sleep/delay the thread for the perscribed number of micro-seconds.
   virtual void SleepForMicroseconds(int micros) = 0;
+
+  // Returns information about a mounted filesystem.
+  // See POSIX statvfs(3) for details.
+  virtual Status StatVfs(const std::string& path, struct statvfs* buf) = 0;
 
   // Get caller's thread id.
   virtual uint64_t gettid() = 0;
@@ -599,6 +605,10 @@ class EnvWrapper : public Env {
   void SleepForMicroseconds(int micros) OVERRIDE {
     target_->SleepForMicroseconds(micros);
   }
+  Status StatVfs(const std::string& path, struct statvfs* buf) OVERRIDE {
+    return target_->StatVfs(path, buf);
+  }
+
   uint64_t gettid() OVERRIDE {
     return target_->gettid();
   }

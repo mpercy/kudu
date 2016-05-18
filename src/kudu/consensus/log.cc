@@ -844,6 +844,9 @@ Status Log::PreAllocateNewSegment() {
 
   if (options_.preallocate_segments) {
     TRACE("Preallocating $0 byte segment in $1", max_segment_size_, next_segment_path_);
+    RETURN_NOT_OK(env_util::AssertSufficientDiskSpace(fs_manager_->env(),
+                                                      next_segment_path_,
+                                                      max_segment_size_));
     // TODO (perf) zero the new segments -- this could result in
     // additional performance improvements.
     RETURN_NOT_OK(next_segment_file_->PreAllocate(max_segment_size_));
