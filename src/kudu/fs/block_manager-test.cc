@@ -17,7 +17,6 @@
 
 #include <memory>
 
-
 #include "kudu/fs/file_block_manager.h"
 #include "kudu/fs/fs.pb.h"
 #include "kudu/fs/log_block_manager.h"
@@ -50,6 +49,14 @@ DEFINE_int32(num_blocks_close, 500,
 
 DECLARE_uint64(log_container_preallocate_bytes);
 DECLARE_uint64(log_container_max_size);
+
+DECLARE_int64(disk_reserved_bytes);
+DECLARE_int64(disk_reserved_inodes);
+
+DECLARE_int64(disk_reserved_bytes_free_for_testing);
+DECLARE_int64(disk_reserved_inodes_free_for_testing);
+
+DECLARE_int32(full_disk_cache_seconds);
 
 // Generic block manager metrics.
 METRIC_DECLARE_gauge_uint64(block_manager_blocks_open_reading);
@@ -929,6 +936,37 @@ TEST_F(LogBlockManagerTest, TestMetadataTruncation) {
                                false);
   ASSERT_TRUE(s.IsCorruption());
   ASSERT_STR_CONTAINS(s.ToString(), "Incorrect checksum");
+}
+
+TEST_F(LogBlockManagerTest, TestDiskSpaceCheck) {
+  FLAGS_full_disk_cache_seconds = 0; // Don't cache device fullness.
+
+  FLAGS_disk_reserved_bytes = 1; // Keep at least 1 byte reserved in the FS.
+  FLAGS_disk_reserved_bytes_free_for_testing = 0;
+  FLAGS_log_container_preallocate_bytes = 100;
+
+  vector<BlockId> created_blocks;
+  gscoped_ptr<WritableBlock> writer;
+  Status s = bm_->CreateBlock(&writer);
+  ASSERT_TRUE(s.IsIOError());
+  ASSERT_STR_CONTAINS(s.ToString(), "All data directories are full");
+
+  // Let the disk full cache expire. We use a COARSE clock so we need to let a
+  // little bit of time pass so we get at least one unit of time greater than
+  // before when we call MonoTime::Now() again.
+  SleepFor(MonoDelta::FromMilliseconds(100));
+
+  FLAGS_disk_reserved_bytes_free_for_testing = 101;
+  ASSERT_OK(bm_->CreateBlock(&writer));
+
+  // Let the disk-full cache expire.
+  SleepFor(MonoDelta::FromMilliseconds(100));
+
+  FLAGS_disk_reserved_bytes_free_for_testing = 0;
+  s = bm_->CreateBlock(&writer);
+  ASSERT_TRUE(s.IsIOError()) << s.ToString();
+
+  ASSERT_OK(writer->Close());
 }
 
 #endif // defined(__linux__)
