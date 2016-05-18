@@ -34,6 +34,8 @@ DEFINE_int32(num_batches, 10000,
              "Number of batches to write to/read from the Log in TestWriteManyBatches");
 
 DECLARE_int32(log_min_segments_to_retain);
+DECLARE_int64(du_reserved_bytes);
+DECLARE_int64(du_reserved_bytes_free_for_testing);
 
 namespace kudu {
 namespace log {
@@ -1046,6 +1048,23 @@ TEST_F(LogTest, TestGetMaxIndexesToSegmentSizeMap) {
   FLAGS_log_min_seconds_to_retain = 500;
   log_->GetMaxIndexesToSegmentSizeMap(10, &max_idx_to_segment_size);
   ASSERT_EQ(0, max_idx_to_segment_size.size());
+}
+
+TEST_F(LogTest, TestDiskSpaceCheck) {
+  FLAGS_du_reserved_bytes = 1; // Keep at least 1 byte reserved in the FS.
+  FLAGS_du_reserved_bytes_free_for_testing = 0;
+  options_.segment_size_mb = 1;
+  Status s = BuildLog();
+  ASSERT_TRUE(s.IsIOError());
+  ASSERT_STR_CONTAINS(s.ToString(), "Insufficient disk space");
+
+  FLAGS_du_reserved_bytes_free_for_testing = 2 * 1024 * 1024;
+  ASSERT_OK(BuildLog());
+
+  // TODO: We don't currently do bookkeeping to ensure that we check if the
+  // disk is past its quota if we write beyond the preallocation limit for a
+  // single segment. If we did that, we could ensure that we check once we
+  // detect that we are past the preallocation limit.
 }
 
 } // namespace log

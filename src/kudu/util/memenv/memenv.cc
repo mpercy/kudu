@@ -557,6 +557,10 @@ class InMemoryEnv : public EnvWrapper {
     return Status::OK();
   }
 
+  virtual Status StatVfs(const std::string& path, struct statvfs* buf) OVERRIDE {
+    return Status::NotSupported("StatVfs() not implemented in InMemoryEnv");
+  }
+
   virtual Status GetTestDirectory(std::string* path) OVERRIDE {
     *path = "/test";
     return Status::OK();

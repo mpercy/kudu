@@ -16,18 +16,54 @@
 // under the License.
 
 #include <algorithm>
-#include <memory>
-
+#include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <memory>
 #include <string>
+#include <sys/statvfs.h>
+#include <utility>
 
+#include "kudu/gutil/map-util.h"
+#include "kudu/gutil/strings/numbers.h"
+#include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/gutil/strings/util.h"
+#include "kudu/util/debug-util.h"
 #include "kudu/util/env.h"
 #include "kudu/util/env_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/flag_tags.h"
 
-using strings::Substitute;
+DEFINE_int64(du_reserved_bytes, 0,
+             "Number of bytes to reserve on each filesystem for non-Kudu usage");
+TAG_FLAG(du_reserved_bytes, runtime);
+TAG_FLAG(du_reserved_bytes, evolving);
+
+DEFINE_int64(du_reserved_inodes, 0,
+             "Number of inodes to reserve on each filesystem for non-Kudu usage");
+TAG_FLAG(du_reserved_inodes, runtime);
+TAG_FLAG(du_reserved_inodes, evolving);
+
+DEFINE_int64(du_reserved_bytes_free_for_testing, -1,
+             "For testing only! Set to number of bytes free on each filesystem. "
+             "Set to -1 to disable this test-specific override");
+TAG_FLAG(du_reserved_bytes_free_for_testing, runtime);
+TAG_FLAG(du_reserved_bytes_free_for_testing, unsafe);
+
+DEFINE_int64(du_reserved_inodes_free_for_testing, -1,
+             "For testing only! Set to number of inodes free on each filesystem. "
+             "Set to -1 to disable this test-specific override");
+TAG_FLAG(du_reserved_inodes_free_for_testing, runtime);
+TAG_FLAG(du_reserved_inodes_free_for_testing, unsafe);
+
+DEFINE_string(du_reserved_prefixes_with_bytes_free_for_testing, "",
+             "For testing only! Syntax: '/path/a:5,/path/b:7' means a has 5 bytes free, "
+             "b has 7 bytes free. Set to empty string to disable this test-specific override.");
+TAG_FLAG(du_reserved_prefixes_with_bytes_free_for_testing, runtime);
+TAG_FLAG(du_reserved_prefixes_with_bytes_free_for_testing, unsafe);
+
 using std::shared_ptr;
+using strings::Substitute;
 
 namespace kudu {
 namespace env_util {
@@ -59,6 +95,54 @@ Status OpenFileForSequential(Env *env, const string &path,
   gscoped_ptr<SequentialFile> r;
   RETURN_NOT_OK(env->NewSequentialFile(path, &r));
   file->reset(r.release());
+  return Status::OK();
+}
+
+// If we can parse the flag value, and the flag specifies an override for the
+// given path, then override the free bytes to match what is specified in the
+// flag. See definition of du_reserved_prefixes_with_bytes_free_for_testing.
+static void OverrideBytesFree(const string& path, const string& flag, int64_t* bytes_free) {
+  for (const auto& str : strings::Split(flag, ",")) {
+    pair<string, string> p = strings::Split(str, ":");
+    if (HasPrefixString(path, p.first)) {
+      int64_t free_override;
+      if (!safe_strto64(p.second.c_str(), p.second.size(), &free_override)) return;
+      *bytes_free = free_override;
+      return;
+    }
+  }
+}
+
+Status AssertSufficientDiskSpace(Env *env, const std::string& path, int64_t bytes) {
+  DCHECK_GE(bytes, 0);
+  struct statvfs buf;
+
+  RETURN_NOT_OK(env->StatVfs(path, &buf));
+  int64_t bytes_free = buf.f_frsize * buf.f_bavail;
+  int64_t inodes_free = buf.f_favail;
+
+  // Allow overriding these values by tests.
+  if (PREDICT_FALSE(FLAGS_du_reserved_bytes_free_for_testing > -1)) {
+    bytes_free = FLAGS_du_reserved_bytes_free_for_testing;
+  }
+  if (PREDICT_FALSE(!FLAGS_du_reserved_prefixes_with_bytes_free_for_testing.empty())) {
+    OverrideBytesFree(path, FLAGS_du_reserved_prefixes_with_bytes_free_for_testing, &bytes_free);
+  }
+  if (PREDICT_FALSE(FLAGS_du_reserved_inodes_free_for_testing > -1)) {
+    inodes_free = FLAGS_du_reserved_inodes_free_for_testing;
+  }
+
+  if (bytes_free - bytes < FLAGS_du_reserved_bytes) {
+    return Status::ServiceUnavailable(Substitute("Insufficient disk space to allocate $0 bytes "
+                                                 "under path $1 "
+                                                 "($2 bytes free vs $3 bytes reserved)",
+                                                 bytes, path, bytes_free, FLAGS_du_reserved_bytes));
+  }
+  if (inodes_free <= FLAGS_du_reserved_inodes) {
+    return Status::ServiceUnavailable(Substitute("Insufficient inodes under path $0 "
+                                                 "($1 inodes free vs $2 inodes reserved)",
+                                                 path, inodes_free, FLAGS_du_reserved_inodes));
+  }
   return Status::OK();
 }
 

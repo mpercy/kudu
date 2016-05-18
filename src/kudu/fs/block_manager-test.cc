@@ -17,7 +17,6 @@
 
 #include <memory>
 
-
 #include "kudu/fs/file_block_manager.h"
 #include "kudu/fs/fs.pb.h"
 #include "kudu/fs/log_block_manager.h"
@@ -50,6 +49,12 @@ DEFINE_int32(num_blocks_close, 500,
 
 DECLARE_uint64(log_container_preallocate_bytes);
 DECLARE_uint64(log_container_max_size);
+
+DECLARE_int64(du_reserved_bytes);
+DECLARE_int64(du_reserved_inodes);
+
+DECLARE_int64(du_reserved_bytes_free_for_testing);
+DECLARE_int64(du_reserved_inodes_free_for_testing);
 
 // Generic block manager metrics.
 METRIC_DECLARE_gauge_uint64(block_manager_blocks_open_reading);
@@ -929,6 +934,40 @@ TEST_F(LogBlockManagerTest, TestMetadataTruncation) {
                                false);
   ASSERT_TRUE(s.IsCorruption());
   ASSERT_STR_CONTAINS(s.ToString(), "Incorrect checksum");
+}
+
+TEST_F(LogBlockManagerTest, TestDiskSpaceCheck) {
+  FLAGS_du_reserved_bytes = 1; // Keep at least 1 byte reserved in the FS.
+  FLAGS_du_reserved_bytes_free_for_testing = 0;
+  FLAGS_log_container_preallocate_bytes = 100;
+
+  vector<BlockId> created_blocks;
+  gscoped_ptr<WritableBlock> writer;
+  Status s = bm_->CreateBlock(&writer);
+  ASSERT_TRUE(s.IsIOError());
+  ASSERT_STR_CONTAINS(s.ToString(), "Insufficient disk space");
+
+  FLAGS_du_reserved_bytes_free_for_testing = 101;
+  ASSERT_OK(bm_->CreateBlock(&writer));
+
+  FLAGS_du_reserved_bytes_free_for_testing = 0;
+  // We allow writes within our preallocated block (100 bytes) before
+  // checking for available disk space again.
+  for (int i = 0; i < 10; i++) {
+    ASSERT_OK(writer->Append("0123456789"));
+  }
+  s = writer->Append("This will be rejected");
+  ASSERT_TRUE(s.IsIOError());
+
+  s = writer->Close();
+  ASSERT_TRUE(s.IsIOError());
+  ASSERT_STR_CONTAINS(s.ToString(), "Insufficient disk space");
+
+  // Allocate enough free space to write the "new block" metadata record. A
+  // metadata record for a new block is around 26 bytes plus some protobuf
+  // container file framing at the time of writing.
+  FLAGS_du_reserved_bytes_free_for_testing = 100;
+  ASSERT_OK(writer->Close());
 }
 
 #endif // defined(__linux__)
