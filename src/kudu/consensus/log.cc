@@ -183,8 +183,7 @@ void Log::AppendThread::RunThread() {
       TRACE_EVENT_FLOW_END0("log", "Batch", entry_batch);
       Status s = log_->DoAppend(entry_batch);
       if (PREDICT_FALSE(!s.ok())) {
-        LOG(ERROR) << "Error appending to the log: " << s.ToString();
-        DLOG(FATAL) << "Aborting: " << s.ToString();
+        LOG(DFATAL) << "Error appending to the log: " << s.ToString();
         entry_batch->set_failed_to_append();
         // TODO If a single transaction fails to append, should we
         // abort all subsequent transactions in this batch or allow
@@ -204,8 +203,7 @@ void Log::AppendThread::RunThread() {
       s = log_->Sync();
     }
     if (PREDICT_FALSE(!s.ok())) {
-      LOG(ERROR) << "Error syncing log" << s.ToString();
-      DLOG(FATAL) << "Aborting: " << s.ToString();
+      LOG(FATAL) << "Error syncing log" << s.ToString();
       for (LogEntryBatch* entry_batch : entry_batches) {
         if (!entry_batch->callback().is_null()) {
           entry_batch->callback().Run(s);
@@ -245,7 +243,13 @@ void Log::AppendThread::Shutdown() {
 // This task is submitted to allocation_pool_ in order to
 // asynchronously pre-allocate new log segments.
 void Log::SegmentAllocationTask() {
-  allocation_status_.Set(PreAllocateNewSegment());
+  Status s = PreAllocateNewSegment();
+  {
+    // We must set allocation_state_ before updating allocation_status_.
+    boost::lock_guard<boost::shared_mutex> lock_guard(allocation_lock_);
+    allocation_state_ = kAllocationFinished;
+  }
+  allocation_status_.Set(s);
 }
 
 const Status Log::kLogShutdownStatus(
@@ -845,10 +849,6 @@ Status Log::PreAllocateNewSegment() {
     RETURN_NOT_OK(next_segment_file_->PreAllocate(max_segment_size_));
   }
 
-  {
-    boost::lock_guard<boost::shared_mutex> lock_guard(allocation_lock_);
-    allocation_state_ = kAllocationFinished;
-  }
   return Status::OK();
 }
 
