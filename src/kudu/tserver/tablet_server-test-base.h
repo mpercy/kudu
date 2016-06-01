@@ -109,17 +109,27 @@ class TabletServerTestBase : public KuduTest {
     mini_server_.reset(new MiniTabletServer(GetTestPath("TabletServerTest-fsroot"), 0));
     mini_server_->options()->master_addresses.clear();
     mini_server_->options()->master_addresses.push_back(HostPort("255.255.255.255", 1));
-    CHECK_OK(mini_server_->Start());
+    ASSERT_OK(mini_server_->Start());
 
     // Set up a tablet inside the server.
-    CHECK_OK(mini_server_->AddTestTablet(kTableId, kTabletId, schema_));
-    CHECK(mini_server_->server()->tablet_manager()->LookupTablet(kTabletId, &tablet_peer_));
+    ASSERT_OK(mini_server_->AddTestTablet(kTableId, kTabletId, schema_));
+    ASSERT_TRUE(mini_server_->server()->tablet_manager()->LookupTablet(kTabletId, &tablet_peer_));
 
     // Creating a tablet is async, we wait here instead of having to handle errors later.
-    CHECK_OK(WaitForTabletRunning(kTabletId));
+    ASSERT_OK(WaitForTabletRunning(kTabletId));
 
     // Connect to it.
     ResetClientProxies();
+
+    // Trigger an election and wait until we are leader.
+    ASSERT_OK(tablet_peer_->consensus()->StartElection(consensus::Consensus::NORMAL_ELECTION));
+    for (int i = 0; i < 100; i++) {
+      if (tablet_peer_->consensus()->role() == consensus::RaftPeerPB::LEADER) {
+        break;
+      }
+      SleepFor(MonoDelta::FromMilliseconds(10));
+    }
+    ASSERT_EQ(consensus::RaftPeerPB::LEADER, tablet_peer_->consensus()->role());
   }
 
   Status WaitForTabletRunning(const char *tablet_id) {

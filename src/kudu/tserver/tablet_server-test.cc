@@ -66,7 +66,7 @@ class TabletServerTest : public TabletServerTestBase {
   // Starts the tablet server, override to start it later.
   virtual void SetUp() OVERRIDE {
     TabletServerTestBase::SetUp();
-    StartTabletServer();
+    NO_FATALS(StartTabletServer());
   }
 
   void DoOrderedScanTest(const Schema& projection, const string& expected_rows_as_string);
