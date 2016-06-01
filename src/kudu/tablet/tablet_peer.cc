@@ -155,7 +155,7 @@ Status TabletPeer::Init(const shared_ptr<Tablet>& tablet,
     RETURN_NOT_OK(ConsensusMetadata::Load(meta_->fs_manager(), tablet_id_,
                                           meta_->fs_manager()->uuid(), &cmeta));
 
-    if (cmeta->committed_config().local()) {
+    if (false && cmeta->committed_config().local()) {
       consensus_.reset(new LocalConsensus(options,
                                           std::move(cmeta),
                                           meta_->fs_manager()->uuid(),
