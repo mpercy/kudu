@@ -120,22 +120,23 @@ class TabletServerTestBase : public KuduTest {
 
     // Connect to it.
     ResetClientProxies();
-
-    // Trigger an election and wait until we are leader.
-    ASSERT_OK(tablet_peer_->consensus()->StartElection(consensus::Consensus::NORMAL_ELECTION));
-    for (int i = 0; i < 100; i++) {
-      if (tablet_peer_->consensus()->role() == consensus::RaftPeerPB::LEADER) {
-        break;
-      }
-      SleepFor(MonoDelta::FromMilliseconds(10));
-    }
-    ASSERT_EQ(consensus::RaftPeerPB::LEADER, tablet_peer_->consensus()->role());
   }
 
   Status WaitForTabletRunning(const char *tablet_id) {
     scoped_refptr<tablet::TabletPeer> tablet_peer;
     RETURN_NOT_OK(mini_server_->server()->tablet_manager()->GetTabletPeer(tablet_id, &tablet_peer));
-    return tablet_peer->WaitUntilConsensusRunning(MonoDelta::FromSeconds(10));
+    RETURN_NOT_OK(tablet_peer->WaitUntilConsensusRunning(MonoDelta::FromSeconds(10)));
+
+    // Trigger an election and wait until we are leader.
+    RETURN_NOT_OK(tablet_peer->consensus()->StartElection(consensus::Consensus::NORMAL_ELECTION));
+    for (int i = 0; i < 1000; i++) {
+      if (tablet_peer->consensus()->role() == consensus::RaftPeerPB::LEADER) {
+        return Status::OK();
+      }
+      SleepFor(MonoDelta::FromMilliseconds(10));
+    }
+    return Status::IllegalState(strings::Substitute("Tablet not leader. Role: $0",
+                                                    tablet_peer->consensus()->role()));
   }
 
   void UpdateTestRowRemote(int tid,
@@ -371,7 +372,6 @@ class TabletServerTestBase : public KuduTest {
     // Opening a tablet is async, we wait here instead of having to handle errors later.
     RETURN_NOT_OK(WaitForTabletRunning(kTabletId));
     return Status::OK();
-
   }
 
   // Verifies that a set of expected rows (key, value) is present in the tablet.
