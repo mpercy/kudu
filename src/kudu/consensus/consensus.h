@@ -33,6 +33,8 @@
 
 namespace kudu {
 
+class MonoDelta;
+
 namespace log {
 class Log;
 }
@@ -128,6 +130,10 @@ class Consensus : public RefCountedThreadSafe<Consensus> {
     ELECT_EVEN_IF_LEADER_IS_ALIVE
   };
   virtual Status StartElection(ElectionMode mode) = 0;
+
+  // Wait until the node has LEADER role.
+  // Returns Status::TimedOut if the role is not LEADER within 'timeout'.
+  virtual Status WaitUntilLeader(const MonoDelta& timeout) = 0;
 
   // Implement a LeaderStepDown() request.
   virtual Status StepDown(LeaderStepDownResponsePB* resp) {
