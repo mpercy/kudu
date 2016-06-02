@@ -145,6 +145,7 @@ class TabletPeerTest : public KuduTabletTest {
 
   Status StartPeer(const ConsensusBootstrapInfo& info) {
     RETURN_NOT_OK(tablet_peer_->Start(info));
+    RETURN_NOT_OK(tablet_peer_->WaitUntilConsensusRunning(MonoDelta::FromSeconds(2)));
     RETURN_NOT_OK(tablet_peer_->consensus()->EmulateElection());
     return Status::OK();
   }
