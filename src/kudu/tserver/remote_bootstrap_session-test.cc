@@ -77,10 +77,10 @@ class RemoteBootstrapTest : public KuduTabletTest {
   }
 
   virtual void SetUp() OVERRIDE {
-    KuduTabletTest::SetUp();
-    SetUpTabletPeer();
-    ASSERT_NO_FATAL_FAILURE(PopulateTablet());
-    InitSession();
+    NO_FATALS(KuduTabletTest::SetUp());
+    NO_FATALS(SetUpTabletPeer());
+    NO_FATALS(PopulateTablet());
+    NO_FATALS(InitSession());
   }
 
   virtual void TearDown() OVERRIDE {
@@ -92,7 +92,7 @@ class RemoteBootstrapTest : public KuduTabletTest {
  protected:
   void SetUpTabletPeer() {
     scoped_refptr<Log> log;
-    CHECK_OK(Log::Open(LogOptions(), fs_manager(), tablet()->tablet_id(),
+    ASSERT_OK(Log::Open(LogOptions(), fs_manager(), tablet()->tablet_id(),
                        *tablet()->schema(),
                        0, // schema_version
                        NULL, &log));
@@ -102,6 +102,8 @@ class RemoteBootstrapTest : public KuduTabletTest {
 
     RaftPeerPB config_peer;
     config_peer.set_permanent_uuid(fs_manager()->uuid());
+    config_peer.mutable_last_known_addr()->set_host("0.0.0.0");
+    config_peer.mutable_last_known_addr()->set_port(0);
     config_peer.set_member_type(RaftPeerPB::VOTER);
 
     tablet_peer_.reset(
@@ -114,12 +116,12 @@ class RemoteBootstrapTest : public KuduTabletTest {
 
     // TODO similar to code in tablet_peer-test, consider refactor.
     RaftConfigPB config;
-    config.set_local(true);
+    config.set_local(false);
     config.add_peers()->CopyFrom(config_peer);
     config.set_opid_index(consensus::kInvalidOpIdIndex);
 
     gscoped_ptr<ConsensusMetadata> cmeta;
-    CHECK_OK(ConsensusMetadata::Create(tablet()->metadata()->fs_manager(),
+    ASSERT_OK(ConsensusMetadata::Create(tablet()->metadata()->fs_manager(),
                                        tablet()->tablet_id(), fs_manager()->uuid(),
                                        config, consensus::kMinimumTerm, &cmeta));
 
@@ -129,15 +131,15 @@ class RemoteBootstrapTest : public KuduTabletTest {
 
     log_anchor_registry_.reset(new LogAnchorRegistry());
     tablet_peer_->SetBootstrapping();
-    CHECK_OK(tablet_peer_->Init(tablet(),
+    ASSERT_OK(tablet_peer_->Init(tablet(),
                                 clock(),
                                 messenger,
                                 log,
                                 metric_entity));
     consensus::ConsensusBootstrapInfo boot_info;
-    CHECK_OK(tablet_peer_->Start(boot_info));
-
+    ASSERT_OK(tablet_peer_->Start(boot_info));
     ASSERT_OK(tablet_peer_->WaitUntilConsensusRunning(MonoDelta::FromSeconds(2)));
+    ASSERT_OK(tablet_peer_->consensus()->EmulateElection());
   }
 
   void TabletPeerStateChangedCallback(const string& tablet_id, const string& reason) {
@@ -176,7 +178,7 @@ class RemoteBootstrapTest : public KuduTabletTest {
   void InitSession() {
     session_.reset(new RemoteBootstrapSession(tablet_peer_.get(), "TestSession", "FakeUUID",
                    fs_manager()));
-    CHECK_OK(session_->Init());
+    ASSERT_OK(session_->Init());
   }
 
   // Read the specified BlockId, via the RemoteBootstrapSession, into a file.
