@@ -251,10 +251,7 @@ Status TSTabletManager::CreateNewTablet(const string& table_id,
                                         scoped_refptr<TabletPeer>* tablet_peer) {
   CHECK_EQ(state(), MANAGER_RUNNING);
 
-  // If the consensus configuration is specified to use local consensus, verify that the peer
-  // matches up with our local info.
-  if (config.local()) {
-    CHECK_EQ(1, config.peers_size());
+  if (config.peers_size() == 1) {
     CHECK_EQ(server_->instance_pb().permanent_uuid(), config.peers(0).permanent_uuid());
   }
 
