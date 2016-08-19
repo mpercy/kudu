@@ -3175,9 +3175,11 @@ Status CatalogManager::SelectReplicasForTablet(const TSDescriptorVector& ts_desc
   consensus::RaftConfigPB *config = cstate->mutable_config();
 
   // Maintain ability to downgrade Kudu to a version with LocalConsensus.
-  if (nreplicas > 1) {
+  if (nreplicas == 1) {
     // Defaults to true in old versions of Kudu.
-    config->set_obsolete_local(false);
+    config->set_obsolete_local(true);
+  } else {
+    config->set_obsolete_local(true);
   }
 
   config->set_opid_index(consensus::kInvalidOpIdIndex);
