@@ -1383,6 +1383,18 @@ class KUDU_EXPORT KuduSession : public sp::enable_shared_from_this<KuduSession> 
   /// @return Operation result status.
   Status SetMutationBufferMaxNum(unsigned int max_num) WARN_UNUSED_RESULT;
 
+  /// Set the maximum number of mutation buffers that may be simultaneously
+  /// flushed per KuduSession object.
+  ///
+  /// The minimum setting for this parameter is 1 (one).
+  /// The default setting for this parameter is 1 (one).
+  ///
+  /// @param [in] max_num
+  ///   The maximum number of mutation buffers per KuduSession object
+  ///   that may be simultaneously flushed.
+  /// @return Operation result status.
+  Status SetMutationBufferMaxFlushNum(unsigned int max_num) WARN_UNUSED_RESULT;
+
   /// Set the timeout for writes made in this session.
   ///
   /// @param [in] millis

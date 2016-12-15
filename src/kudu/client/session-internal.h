@@ -83,7 +83,10 @@ class KuduSession::Data {
   Status SetBufferFlushInterval(unsigned int period_ms);
 
   // Set the limit on maximum number of batchers with pending operations.
-  Status SetMaxBatchersNum(unsigned int period_ms);
+  Status SetMaxBatchersNum(unsigned int max_num);
+
+  // Set the limit on maximum number of batchers simultaneously flushing.
+  Status SetMaxFlushingBatchersNum(unsigned int max_num);
 
   // Set timeout for write operations, in milliseconds.
   void SetTimeoutMillis(int timeout_ms);
@@ -207,6 +210,12 @@ class KuduSession::Data {
 
   // Limit on the number of active batchers.
   size_t batchers_num_limit_;
+
+  // Number of batchers currently flushing.
+  size_t flushing_batchers_num_; // protected by mutex_
+
+  // Maximum number of batchers that may simultaneously flush.
+  size_t flushing_batchers_num_limit_;
 
   // Session-wide limit on total size of buffer used by all batched write
   // operations. The buffer is a virtual entity: there isn't contiguous place

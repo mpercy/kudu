@@ -115,7 +115,6 @@ MAKE_ENUM_LIMITS(kudu::client::KuduScanner::OrderMode,
 namespace kudu {
 namespace client {
 
-using internal::Batcher;
 using internal::ErrorCollector;
 using internal::MetaCache;
 using sp::shared_ptr;
@@ -826,6 +825,10 @@ Status KuduSession::SetMutationBufferFlushInterval(unsigned int millis) {
 
 Status KuduSession::SetMutationBufferMaxNum(unsigned int max_num) {
   return data_->SetMaxBatchersNum(max_num);
+}
+
+Status KuduSession::SetMutationBufferMaxFlushNum(unsigned int max_num) {
+  return data_->SetMaxFlushingBatchersNum(max_num);
 }
 
 void KuduSession::SetTimeoutMillis(int timeout_ms) {

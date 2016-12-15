@@ -51,9 +51,8 @@ class ClientFlushInterleaveITest : public MiniClusterITestBase {
 };
 
 // Attempt to trigger client flush interleaving, resulting in reordered writes
-// on the server side. This test currently fails, and so is disabled.
-// See KUDU-1767.
-TEST_F(ClientFlushInterleaveITest, DISABLED_TestInterleave) {
+// on the server side. Regression test for KUDU-1767.
+TEST_F(ClientFlushInterleaveITest, TestInterleave) {
   const int kNumTabletServers = 1;
   NO_FATALS(StartCluster(kNumTabletServers));
 

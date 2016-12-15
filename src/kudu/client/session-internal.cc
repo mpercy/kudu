@@ -51,6 +51,8 @@ KuduSession::Data::Data(shared_ptr<KuduClient> client,
       condition_(&mutex_),
       batchers_num_(0),
       batchers_num_limit_(2),
+      flushing_batchers_num_(0),
+      flushing_batchers_num_limit_(1),
       buffer_bytes_limit_(7 * 1024 * 1024),
       buffer_watermark_pct_(50),
       buffer_bytes_used_(0),
@@ -67,6 +69,7 @@ void KuduSession::Data::FlushFinished(Batcher* batcher) {
   {
     std::lock_guard<Mutex> l(mutex_);
     buffer_bytes_used_ -= bytes_flushed;
+    --flushing_batchers_num_;
     --batchers_num_;
     // The logic of KuduSession::ApplyWriteOp() needs to know
     // if total number of batchers or buffer byte count decreases.
@@ -209,6 +212,20 @@ Status KuduSession::Data::SetMaxBatchersNum(unsigned int max_num) {
   return Status::OK();
 }
 
+Status KuduSession::Data::SetMaxFlushingBatchersNum(unsigned int max_num) {
+  // 1 is the minimum possible number of flushing batchers per session.
+  // 0 means there isn't any limit on the maximum number of flushing batchers.
+  std::lock_guard<Mutex> l(mutex_);
+  if (HasPendingOperationsUnlocked()) {
+    // NOTE: this is an artificial restriction.
+    return Status::IllegalState(
+        "Cannot change the limit on maximum number of batchers when writes are buffered.");
+  }
+  flushing_batchers_num_limit_ = max_num;
+  return Status::OK();
+}
+
+
 void KuduSession::Data::SetTimeoutMillis(int timeout_ms) {
   if (timeout_ms < 0) {
     timeout_ms = 0;
@@ -271,8 +288,11 @@ void KuduSession::Data::FlushCurrentBatcher(int64_t watermark,
   scoped_refptr<Batcher> batcher_to_flush;
   {
     std::lock_guard<Mutex> l(mutex_);
-    if (PREDICT_TRUE(batcher_) && batcher_->buffer_bytes_used() >= watermark) {
+    if (PREDICT_TRUE(batcher_) &&
+        batcher_->buffer_bytes_used() >= watermark &&
+        flushing_batchers_num_ < flushing_batchers_num_limit_) {
       batcher_to_flush.swap(batcher_);
+      ++flushing_batchers_num_;
     }
   }
   if (batcher_to_flush) {
@@ -297,8 +317,10 @@ MonoDelta KuduSession::Data::FlushCurrentBatcher(const MonoDelta& max_age) {
       const MonoTime first_op_time = batcher_->first_op_time();
       if (PREDICT_TRUE(first_op_time.Initialized())) {
         const MonoTime now = MonoTime::Now();
-        if (first_op_time + max_age <= now) {
+        if (first_op_time + max_age <= now &&
+            flushing_batchers_num_ < flushing_batchers_num_limit_) {
           batcher_to_flush.swap(batcher_);
+          ++flushing_batchers_num_;
         } else {
           time_left = first_op_time + max_age - now;
         }
@@ -407,7 +429,8 @@ Status KuduSession::Data::ApplyWriteOp(KuduWriteOperation* write_op) {
     // is not there, allocate one and set it to be current.
     if (!batcher_) {
       while (batchers_num_limit_ != 0 &&
-             batchers_num_ >= batchers_num_limit_) {
+             (batchers_num_ >= batchers_num_limit_ ||
+              flushing_batchers_num_ >= flushing_batchers_num_limit_)) {
         // Wait until it's possible to add a new batcher given the limit
         // on the maximum outstanding batchers per session.
         condition_.Wait();
