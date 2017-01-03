@@ -20,6 +20,21 @@
 #include "kudu/gutil/macros.h"
 #include "kudu/util/debug/leak_annotations.h"
 
+// Ignore a single leaked object, given its pointer.
+// Does nothing if LeakSanitizer is not enabled.
+#define ANNOTATE_LEAKING_OBJECT_PTR(p)
+
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    if defined(__linux__)
+
+#undef ANNOTATE_LEAKING_OBJECT_PTR(p)
+#define ANNOTATE_LEAKING_OBJECT_PTR(p) __lsan_ignore_object(p);
+
+#    endif
+#  endif
+#endif
+
 namespace kudu {
 namespace debug {
 
