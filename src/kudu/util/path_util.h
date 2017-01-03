@@ -28,6 +28,9 @@ extern const char kTmpInfix[];
 // Infix from versions of Kudu prior to 1.2.
 extern const char kOldTmpInfix[];
 
+// Returns true if the specified path is relative.
+bool IsRelativePath(const std::string& path);
+
 // Join two path segments with the appropriate path separator,
 // if necessary.
 std::string JoinPathSegments(const std::string &a,

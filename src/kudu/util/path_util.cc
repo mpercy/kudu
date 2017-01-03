@@ -36,6 +36,11 @@ namespace kudu {
 const char kTmpInfix[] = ".kudutmp";
 const char kOldTmpInfix[] = ".tmp";
 
+bool IsRelativePath(const std::string& path) {
+  if (path.empty() || path[0] != '/') return true;
+  return false;
+}
+
 std::string JoinPathSegments(const std::string &a,
                              const std::string &b) {
   CHECK(!a.empty()) << "empty first component: " << a;

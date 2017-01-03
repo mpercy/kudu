@@ -58,4 +58,13 @@ TEST(TestPathUtil, DirNameTest) {
   ASSERT_EQ("/ab", DirName("/ab/cd"));
 }
 
+TEST(TestPathUtil, IsRelativePathTest) {
+  ASSERT_TRUE(IsRelativePath(""));
+  ASSERT_TRUE(IsRelativePath("hello"));
+  ASSERT_TRUE(IsRelativePath("../hello"));
+  ASSERT_FALSE(IsRelativePath("/"));
+  ASSERT_FALSE(IsRelativePath("/test"));
+  ASSERT_FALSE(IsRelativePath("/test/foo/bar"));
+}
+
 } // namespace kudu
