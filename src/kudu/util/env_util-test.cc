@@ -21,15 +21,20 @@
 #include <memory>
 #include <sys/statvfs.h>
 
+#include "kudu/gutil/strings/substitute.h"
+#include "kudu/util/path_util.h"
+#include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
 
 DECLARE_int64(disk_reserved_bytes);
 DECLARE_int64(disk_reserved_bytes_free_for_testing);
 
-namespace kudu {
-
 using std::string;
 using std::unique_ptr;
+using strings::Substitute;
+
+namespace kudu {
+namespace env_util {
 
 class EnvUtilTest: public KuduTest {
 };
@@ -39,17 +44,41 @@ TEST_F(EnvUtilTest, TestDiskSpaceCheck) {
 
   const int64_t kRequestedBytes = 0;
   int64_t reserved_bytes = 0;
-  ASSERT_OK(env_util::VerifySufficientDiskSpace(env, test_dir_, kRequestedBytes, reserved_bytes));
+  ASSERT_OK(VerifySufficientDiskSpace(env, test_dir_, kRequestedBytes, reserved_bytes));
 
   // Make it seem as if the disk is full and specify that we should have
   // reserved 200 bytes. Even asking for 0 bytes should return an error
   // indicating we are out of space.
   FLAGS_disk_reserved_bytes_free_for_testing = 0;
   reserved_bytes = 200;
-  Status s = env_util::VerifySufficientDiskSpace(env, test_dir_, kRequestedBytes, reserved_bytes);
+  Status s = VerifySufficientDiskSpace(env, test_dir_, kRequestedBytes, reserved_bytes);
   ASSERT_TRUE(s.IsIOError());
   ASSERT_EQ(ENOSPC, s.posix_code());
   ASSERT_STR_CONTAINS(s.ToString(), "Insufficient disk space");
 }
 
+// Ensure that we can recursively create directories using both absolute and
+// relative paths.
+TEST_F(EnvUtilTest, TestCreateDirsRecursively) {
+  Env* env = Env::Default();
+
+  // Absolute path. We don't need to clean this up.
+  string path = JoinPathSegments(JoinPathSegments(JoinPathSegments(test_dir_, "a"), "b"), "c");
+  ASSERT_OK(CreateDirsRecursively(env, path));
+  bool is_dir;
+  ASSERT_OK(env->IsDirectory(path, &is_dir));
+  ASSERT_TRUE(is_dir);
+
+  // Relative path. We should clean this up manually.
+  string rel_base = Substitute("$0-$1", CURRENT_TEST_CASE_NAME(), CURRENT_TEST_NAME());
+  path = JoinPathSegments(JoinPathSegments(JoinPathSegments(rel_base, "x"), "y"), "z");
+  ASSERT_OK(CreateDirsRecursively(env, path));
+  ASSERT_OK(env->IsDirectory(path, &is_dir));
+  ASSERT_TRUE(is_dir);
+
+  ASSERT_OK(env->DeleteRecursively(rel_base));
+  ASSERT_FALSE(env->FileExists(path));
+}
+
+} // namespace env_util
 } // namespace kudu
