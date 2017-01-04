@@ -294,11 +294,9 @@ class ExternalMiniCluster : public MiniClusterBase {
   // standard Kudu test directory otherwise.
   std::string GetDataPath(const std::string& daemon_id) const;
 
-  // Returns the path where 'daemon_id' is expected to store its logs, or none
-  // if it will log to stderr. Based on ExternalMiniClusterOptions.logtostderr
-  // and ExternalMiniClusterOptions.data_root, or on the standard Kudu test
-  // directory otherwise.
-  boost::optional<std::string> GetLogPath(const std::string& daemon_id) const;
+  // Returns the path where 'daemon_id' is expected to store its logs, or other
+  // files that reside in the log dir.
+  std::string GetLogPath(const std::string& daemon_id) const;
 
  private:
   FRIEND_TEST(MasterFailoverTest, TestKillAnyMaster);
@@ -326,13 +324,18 @@ class ExternalMiniCluster : public MiniClusterBase {
   DISALLOW_COPY_AND_ASSIGN(ExternalMiniCluster);
 };
 
+struct ExternalDaemonOptions {
+  std::shared_ptr<rpc::Messenger> messenger;
+  std::string exe;
+  std::string data_dir;
+  std::string log_dir;
+  bool log_to_stderr = false;
+  std::vector<std::string> extra_flags;
+};
+
 class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
  public:
-  ExternalDaemon(std::shared_ptr<rpc::Messenger> messenger,
-                 std::string exe,
-                 std::string data_dir,
-                 boost::optional<std::string> log_dir,
-                 std::vector<std::string> extra_flags);
+  ExternalDaemon(ExternalDaemonOptions opts);
 
   HostPort bound_rpc_hostport() const;
   Sockaddr bound_rpc_addr() const;
@@ -343,6 +346,10 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
   // Return the pid of the running process.
   // Causes a CHECK failure if the process is not running.
   pid_t pid() const;
+
+  // Return the pointer to the undelying Subprocess if it is set.
+  // Otherwise, returns nullptr.
+  Subprocess* process() const;
 
   // Set the path of the executable to run as a daemon.
   // Overrides the exe path specified in the constructor.
@@ -390,11 +397,11 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
 
   const std::string& data_dir() const { return data_dir_; }
 
-  // Returns the log dir of the external daemon, or none if the daemon is
-  // configured to log to stderr.
-  const boost::optional<std::string>& log_dir() const {
-    return log_dir_;
-  }
+  // Returns the log dir of the external daemon.
+  const std::string& log_dir() const { return log_dir_; }
+
+  // Returns true if the daemon will log to stderr.
+  const bool logtostderr() const { return logtostderr_; }
 
   // Return a pointer to the flags used for this server on restart.
   // Modifying these flags will only take effect on the next restart.
@@ -450,7 +457,8 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
 
   const std::shared_ptr<rpc::Messenger> messenger_;
   const std::string data_dir_;
-  const boost::optional<std::string> log_dir_;
+  const std::string log_dir_;
+  const bool logtostderr_;
   std::string exe_;
   std::vector<std::string> extra_flags_;
   std::map<std::string, std::string> extra_env_;
@@ -486,21 +494,12 @@ class ScopedResumeExternalDaemon {
   DISALLOW_COPY_AND_ASSIGN(ScopedResumeExternalDaemon);
 };
 
-
 class ExternalMaster : public ExternalDaemon {
  public:
-  ExternalMaster(std::shared_ptr<rpc::Messenger> messenger,
-                 std::string exe,
-                 std::string data_dir,
-                 boost::optional<std::string> log_dir,
-                 std::vector<std::string> extra_flags);
+  ExternalMaster(ExternalDaemonOptions opts);
 
-  ExternalMaster(std::shared_ptr<rpc::Messenger> messenger,
-                 std::string exe,
-                 std::string data_dir,
-                 boost::optional<std::string> log_dir,
-                 std::string rpc_bind_address,
-                 std::vector<std::string> extra_flags);
+  ExternalMaster(ExternalDaemonOptions opts,
+                 std::string rpc_bind_address);
 
   Status Start();
 
@@ -519,13 +518,9 @@ class ExternalMaster : public ExternalDaemon {
 
 class ExternalTabletServer : public ExternalDaemon {
  public:
-  ExternalTabletServer(std::shared_ptr<rpc::Messenger> messenger,
-                       std::string exe,
-                       std::string data_dir,
-                       boost::optional<std::string> log_dir,
+  ExternalTabletServer(ExternalDaemonOptions opts,
                        std::string bind_host,
-                       std::vector<HostPort> master_addrs,
-                       std::vector<std::string> extra_flags);
+                       std::vector<HostPort> master_addrs);
 
   Status Start();
 
