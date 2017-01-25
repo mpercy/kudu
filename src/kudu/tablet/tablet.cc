@@ -1117,6 +1117,10 @@ void Tablet::RegisterMaintenanceOps(MaintenanceManager* maint_mgr) {
   gscoped_ptr<MaintenanceOp> major_delta_compact_op(new MajorDeltaCompactionOp(this));
   maint_mgr->RegisterOp(major_delta_compact_op.get());
   maintenance_ops_.push_back(major_delta_compact_op.release());
+
+  gscoped_ptr<MaintenanceOp> undo_deltafile_gc_op(new UndoDeltaFileGCOp(this));
+  maint_mgr->RegisterOp(undo_deltafile_gc_op.get());
+  maintenance_ops_.push_back(undo_deltafile_gc_op.release());
 }
 
 void Tablet::UnregisterMaintenanceOps() {
@@ -1698,6 +1702,59 @@ double Tablet::GetPerfImprovementForBestDeltaCompactUnlocked(RowSet::DeltaCompac
     *rs = worst_rs;
   }
   return worst_delta_perf;
+}
+
+Status Tablet::InitAncientUndoDeltas(MonoDelta max_init_duration, int64_t* bytes_in_ancient_undos) {
+  MonoTime deadline = MonoTime::Now() + max_init_duration;
+  Timestamp ancient_history_mark;
+  if (!Tablet::GetTabletAncientHistoryMark(&ancient_history_mark)) return Status::OK();
+
+  // No need to hold the selection lock here, since we are not actually making
+  // any changes.
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+
+  // Traverse the rowsets in random order so that we don't tend to starve any
+  // of them over time.
+  RowSetVector rowsets = comps->rowsets->all_rowsets();
+  std::random_shuffle(rowsets.begin(), rowsets.end());
+
+  constexpr int kMaxToInit = -1; // Initialize as many deltas as possible within the deadline.
+  int64_t tmp_bytes_in_ancient_undos = 0;
+  for (const auto& rowset : rowsets) {
+    int64_t num_deltas_initialized;
+    int64_t cur_bytes_in_ancient_undos;
+    RETURN_NOT_OK(rowset->InitAncientUndoDeltas(ancient_history_mark, kMaxToInit, deadline,
+                                                &num_deltas_initialized,
+                                                &cur_bytes_in_ancient_undos));
+    tmp_bytes_in_ancient_undos += cur_bytes_in_ancient_undos;
+  }
+  if (bytes_in_ancient_undos) *bytes_in_ancient_undos = tmp_bytes_in_ancient_undos;
+  return Status::OK();
+}
+
+Status Tablet::DeleteAncientUndoDeltas() {
+  Timestamp ancient_history_mark;
+  if (!Tablet::GetTabletAncientHistoryMark(&ancient_history_mark)) return Status::OK();
+
+  // We hold the selection lock so other threads will not attempt to select the
+  // same rowsets for compaction while we delete old undos.
+  std::lock_guard<std::mutex> compact_lock(compact_select_lock_);
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+
+  constexpr int kMaxToDelete = -1; // Delete as many deltas as possible.
+  for (const auto& rowset : comps->rowsets->all_rowsets()) {
+    if (!rowset->IsAvailableForCompaction()) {
+      continue;
+    }
+    int64_t num_deltas_deleted;
+    int64_t bytes_deleted;
+    std::lock_guard<std::mutex> l(*rowset->compact_flush_lock());
+    RETURN_NOT_OK(rowset->DeleteAncientUndoDeltas(ancient_history_mark, kMaxToDelete,
+                                                  &num_deltas_deleted, &bytes_deleted));
+  }
+  return Status::OK();
 }
 
 size_t Tablet::num_rowsets() const {

@@ -65,6 +65,11 @@ DEFINE_int64(log_target_replay_size_mb, 1024,
              "these operations to disk.");
 TAG_FLAG(log_target_replay_size_mb, experimental);
 
+DEFINE_int64(data_gc_min_size_mb, 128,
+             "The target minimum size (in megabytes), per tablet, of ancient "
+             "data on disk needed to prioritize deletion of that ancient data.");
+TAG_FLAG(data_gc_min_size_mb, experimental);
+
 namespace kudu {
 
 MaintenanceOpStats::MaintenanceOpStats() {
@@ -267,6 +272,9 @@ MaintenanceOp* MaintenanceManager::FindBestOp() {
     return nullptr;
   }
 
+  int64_t low_io_most_data_retained_bytes = 0;
+  MaintenanceOp* low_io_most_data_retained_bytes_op = nullptr;
+
   int64_t low_io_most_logs_retained_bytes = 0;
   MaintenanceOp* low_io_most_logs_retained_bytes_op = nullptr;
 
@@ -289,9 +297,15 @@ MaintenanceOp* MaintenanceManager::FindBestOp() {
       continue;
     }
     if (stats.logs_retained_bytes() > low_io_most_logs_retained_bytes &&
-        op->io_usage_ == MaintenanceOp::LOW_IO_USAGE) {
+        op->io_usage() == MaintenanceOp::LOW_IO_USAGE) {
       low_io_most_logs_retained_bytes_op = op;
       low_io_most_logs_retained_bytes = stats.logs_retained_bytes();
+    }
+
+    if (stats.data_retained_bytes() > low_io_most_data_retained_bytes &&
+        op->io_usage() == MaintenanceOp::LOW_IO_USAGE) {
+      low_io_most_data_retained_bytes_op = op;
+      low_io_most_data_retained_bytes = stats.data_retained_bytes();
     }
 
     if (stats.ram_anchored() > most_mem_anchored) {
@@ -324,6 +338,18 @@ MaintenanceOp* MaintenanceManager::FindBestOp() {
                     << "at " << low_io_most_logs_retained_bytes
                     << " bytes with a low IO cost";
       return low_io_most_logs_retained_bytes_op;
+    }
+  }
+
+  // Look at ops that we can run quickly that free up data on disk.
+  if (low_io_most_data_retained_bytes_op) {
+    if (low_io_most_data_retained_bytes > FLAGS_data_gc_min_size_mb * 1024 * 1024) {
+      VLOG_AND_TRACE("maintenance", 1)
+                    << "Performing " << low_io_most_data_retained_bytes_op->name() << ", "
+                    << "because it can free up more data "
+                    << "at " << low_io_most_data_retained_bytes
+                    << " bytes with a low IO cost";
+      return low_io_most_data_retained_bytes_op;
     }
   }
 
@@ -365,7 +391,7 @@ MaintenanceOp* MaintenanceManager::FindBestOp() {
 }
 
 void MaintenanceManager::LaunchOp(MaintenanceOp* op) {
-  MonoTime start_time(MonoTime::Now());
+  MonoTime start_time = MonoTime::Now();
   op->RunningGauge()->Increment();
 
   scoped_refptr<Trace> trace(new Trace);
@@ -378,10 +404,10 @@ void MaintenanceManager::LaunchOp(MaintenanceOp* op) {
   LOG(INFO) << op->name() << " metrics: " << trace->MetricsAsJSON();
 
   op->RunningGauge()->Decrement();
-  MonoTime end_time(MonoTime::Now());
-  MonoDelta delta(end_time.GetDeltaSince(start_time));
-  std::lock_guard<Mutex> guard(lock_);
+  MonoTime end_time = MonoTime::Now();
+  MonoDelta delta = end_time - start_time;
 
+  std::lock_guard<Mutex> l(lock_);
   CompletedOp& completed_op = completed_ops_[completed_ops_count_ % completed_ops_.size()];
   completed_op.name = op->name();
   completed_op.duration = delta;

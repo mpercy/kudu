@@ -23,6 +23,10 @@
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_metrics.h"
 
+DEFINE_int32(mm_init_undo_deltas_millis_per_cycle, 100,
+             "The maximum number of milliseconds we will spend opened undo "
+             "delta files per maintenance manager cycle");
+
 using std::string;
 using strings::Substitute;
 
@@ -245,6 +249,43 @@ scoped_refptr<Histogram> MajorDeltaCompactionOp::DurationHistogram() const {
 
 scoped_refptr<AtomicGauge<uint32_t> > MajorDeltaCompactionOp::RunningGauge() const {
   return tablet_->metrics()->delta_major_compact_rs_running;
+}
+
+////////////////////////////////////////////////////////////
+// UndoDeltaFileGCOp
+////////////////////////////////////////////////////////////
+UndoDeltaFileGCOp::UndoDeltaFileGCOp(Tablet* tablet)
+  : TabletOpBase(Substitute("UndoDeltaFileGCOp($0)", tablet->tablet_id()),
+                 MaintenanceOp::LOW_IO_USAGE, tablet) {
+}
+
+void UndoDeltaFileGCOp::UpdateStats(MaintenanceOpStats* stats) {
+  int64_t bytes_in_ancient_undos = 0;
+  WARN_NOT_OK(tablet_->InitAncientUndoDeltas(
+      MonoDelta::FromMilliseconds(FLAGS_mm_init_undo_deltas_millis_per_cycle),
+      &bytes_in_ancient_undos),
+      Substitute("$0Unable to initialize old undo delta files on tablet $1",
+                 LogPrefix(), tablet_->tablet_id()));
+  stats->set_data_retained_bytes(bytes_in_ancient_undos);
+}
+
+bool UndoDeltaFileGCOp::Prepare() {
+  // Nothing for us to do.
+  return true;
+}
+
+void UndoDeltaFileGCOp::Perform() {
+  CHECK_OK_PREPEND(tablet_->DeleteAncientUndoDeltas(),
+              Substitute("$0GC of undo delta files failed on tablet $1",
+                         LogPrefix(), tablet_->tablet_id()));
+}
+
+scoped_refptr<Histogram> UndoDeltaFileGCOp::DurationHistogram() const {
+  return tablet_->metrics()->undo_deltafile_gc_duration;
+}
+
+scoped_refptr<AtomicGauge<uint32_t> > UndoDeltaFileGCOp::RunningGauge() const {
+  return tablet_->metrics()->undo_deltafile_gc_running;
 }
 
 } // namespace tablet

@@ -338,6 +338,21 @@ class MemRowSet : public RowSet,
     return 0;
   }
 
+  Status InitAncientUndoDeltas(Timestamp /*ancient_history_mark*/,
+                               int64_t /*max_deltas_to_initialize*/,
+                               MonoTime /*deadline*/,
+                               int64_t* /*num_deltas_initialized*/,
+                               int64_t* /*bytes_in_ancient_undos*/) OVERRIDE {
+    return Status::OK();
+  }
+
+  Status DeleteAncientUndoDeltas(Timestamp /*ancient_history_mark*/,
+                                 int64_t /*max_deltas_to_delete*/,
+                                 int64_t* /*num_deltas_deleted*/,
+                                 int64_t* /*bytes_deleted*/) OVERRIDE {
+    return Status::OK();
+  }
+
   Status FlushDeltas() OVERRIDE { return Status::OK(); }
 
   Status MinorCompactDeltaStores() OVERRIDE { return Status::OK(); }

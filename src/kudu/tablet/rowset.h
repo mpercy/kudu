@@ -143,6 +143,22 @@ class RowSet {
   // Compact delta stores if more than one.
   virtual Status MinorCompactDeltaStores() = 0;
 
+  // TODO: doc me
+  virtual Status InitAncientUndoDeltas(Timestamp ancient_history_mark,
+                                       int64_t max_deltas_to_initialize,
+                                       MonoTime deadline,
+                                       int64_t* num_deltas_initialized,
+                                       int64_t* bytes_in_ancient_undos) = 0;
+
+  // Delete up to a specified number of UNDO delta files that have a max
+  // timestamp lower than the given ancient history mark. This method only
+  // checks the oldest 'max_deltas_to_delete' UNDO delta files, and only if
+  // they are already initialized.
+  virtual Status DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
+                                         int64_t max_deltas_to_delete,
+                                         int64_t* num_deltas_deleted,
+                                         int64_t* bytes_deleted) = 0;
+
   virtual ~RowSet() {}
 
   // Return true if this RowSet is available for compaction, based on
@@ -310,6 +326,21 @@ class DuplicatingRowSet : public RowSet {
     // It's important that DuplicatingRowSet does not FlushDeltas. This prevents
     // a bug where we might end up with out-of-order deltas. See the long
     // comment in Tablet::Flush(...)
+    return Status::OK();
+  }
+
+  Status InitAncientUndoDeltas(Timestamp /*ancient_history_mark*/,
+                               int64_t /*max_deltas_to_initialize*/,
+                               MonoTime /*deadline*/,
+                               int64_t* /*num_deltas_initialized*/,
+                               int64_t* /*bytes_in_ancient_undos*/) OVERRIDE {
+    return Status::OK();
+  }
+
+  Status DeleteAncientUndoDeltas(Timestamp /*ancient_history_mark*/,
+                                 int64_t /*max_deltas_to_delete*/,
+                                 int64_t* /*num_deltas_deleted*/,
+                                 int64_t* /*bytes_deleted*/) OVERRIDE {
     return Status::OK();
   }
 

@@ -158,6 +158,43 @@ class DeltaTracker {
   // all indexes starting with "start_idx" will be compacted.
   Status CompactStores(int start_idx, int end_idx);
 
+  // Initialize (open and read the footer metadata) up to
+  // 'max_deltas_to_initialize' undo delta files, in ascending timestamp order,
+  // until the given deadline is passed, or until the max_timestamp of the
+  // initialized delta file is newer than 'ancient_history_mark'. Returns the
+  // number of files actually initialized in 'num_deltas_initialized' and the
+  // number of bytes that can be freed by deleting those files from disk in
+  // 'bytes_in_ancient_undos'.
+  //
+  // If 'max_deltas_to_initialize' is set to -1, there is no numerical limit to
+  // the number of deltas to be initialized.
+  // If 'ancient_history_mark' is set to Timestamp::kInvalidTimestamp then the
+  // max_timestamp of each delta is not considered.
+  // If 'deadline' is not Initialized() then no deadline is enforced.
+  // If no return value is desired, any of 'num_deltas_initialized' or
+  // 'bytes_in_ancient_undos' may be passed as a nullptr.
+  Status InitAncientUndoDeltas(Timestamp ancient_history_mark,
+                               int64_t max_deltas_to_initialize,
+                               MonoTime deadline,
+                               int64_t* num_deltas_initialized,
+                               int64_t* bytes_in_ancient_undos);
+
+  // Delete up to 'max_deltas_to_delete' initialized undo delta files with a
+  // max_timestamp earlier than the specified 'ancient_history_mark' and return
+  // the number of deltas deleted and the number of bytes deleted in
+  // 'num_deltas_deleted' and 'bytes_deleted', respectively.
+  //
+  // If 'ancient_history_mark' is set to Timestamp::kInvalidTimestamp then this
+  // method returns an error.
+  // If 'max_deltas_to_delete' is set to -1, there is no numerical limit to the
+  // number of deltas to be deleted.
+  // If no return value is desired, any of 'num_deltas_deleted' or
+  // 'bytes_deleted' may be passed as a nullptr.
+  Status DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
+                                 int64_t max_deltas_to_delete,
+                                 int64_t* num_deltas_deleted,
+                                 int64_t* bytes_deleted);
+
   // Replace the subsequence of stores that matches 'stores_to_replace' with
   // delta file readers corresponding to 'new_delta_blocks', which may be empty.
   // If 'stores_to_replace' is empty then the stores represented by
@@ -284,9 +321,10 @@ class DeltaTracker {
   mutable rw_spinlock component_lock_;
 
   // Exclusive lock that ensures that only one flush or compaction can run
-  // at a time. Protects delta_stores_. NOTE: this lock cannot be acquired
-  // while component_lock is held: otherwise, Flush and Compaction threads
-  // (that both first acquire this lock and then component_lock) will deadlock.
+  // at a time. Protects redo_delta_stores_ and undo_delta_stores_.
+  // NOTE: this lock cannot be acquired while component_lock is held:
+  // otherwise, Flush and Compaction threads (that both first acquire this lock
+  // and then component_lock) will deadlock.
   //
   // TODO(perf): this needs to be more fine grained
   mutable Mutex compact_flush_lock_;

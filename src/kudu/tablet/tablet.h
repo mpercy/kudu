@@ -270,6 +270,13 @@ class Tablet {
   double GetPerfImprovementForBestDeltaCompactUnlocked(RowSet::DeltaCompactionType type,
                                                        std::shared_ptr<RowSet>* rs) const;
 
+  // FIXME: doc me
+  Status InitAncientUndoDeltas(MonoDelta max_init_duration, int64_t* bytes_in_ancient_undos);
+
+  // Finds and deletes all UNDO delta files that have a maximum op timestamp
+  // less than the ancient history mark.
+  Status DeleteAncientUndoDeltas();
+
   // Return the current number of rowsets in the tablet.
   size_t num_rowsets() const;
 
@@ -549,7 +556,6 @@ class Tablet {
   LockManager lock_manager_;
 
   gscoped_ptr<CompactionPolicy> compaction_policy_;
-
 
   // Lock protecting the selection of rowsets for compaction.
   // Only one thread may run the compaction selection algorithm at a time

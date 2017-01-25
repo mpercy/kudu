@@ -19,6 +19,7 @@
 
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -186,6 +187,19 @@ Status RowSetMetadata::CommitUpdate(const RowSetMetadataUpdate& update) {
       redo_delta_blocks_.push_back(b);
     }
 
+    // Remove undo blocks.
+    std::unordered_set<BlockId, BlockIdHash> undos_to_remove(update.remove_undo_blocks_.begin(),
+                                                             update.remove_undo_blocks_.end());
+    auto iter = undo_delta_blocks_.begin();
+    while (iter != undo_delta_blocks_.end()) {
+      if (ContainsKey(undos_to_remove, *iter)) {
+        removed.push_back(*iter);
+        iter = undo_delta_blocks_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+
     if (!update.new_undo_block_.IsNull()) {
       // Front-loading to keep the UNDO files in their natural order.
       undo_delta_blocks_.insert(undo_delta_blocks_.begin(), update.new_undo_block_);
@@ -256,6 +270,13 @@ RowSetMetadataUpdate& RowSetMetadataUpdate::ReplaceRedoDeltaBlocks(
 
   ReplaceDeltaBlocks rdb = { to_remove, to_add };
   replace_redo_blocks_.push_back(rdb);
+  return *this;
+}
+
+RowSetMetadataUpdate& RowSetMetadataUpdate::RemoveUndoDeltaBlocks(
+    const std::vector<BlockId>& to_remove) {
+
+  remove_undo_blocks_.insert(remove_undo_blocks_.end(), to_remove.begin(), to_remove.end());
   return *this;
 }
 

@@ -70,6 +70,16 @@ class MaintenanceOpStats {
     ram_anchored_ = ram_anchored;
   }
 
+  int64_t data_retained_bytes() const {
+    DCHECK(valid_);
+    return data_retained_bytes_;
+  }
+
+  void set_data_retained_bytes(int64_t data_retained_bytes) {
+    UpdateLastModified();
+    data_retained_bytes_ = data_retained_bytes;
+  }
+
   int64_t logs_retained_bytes() const {
     DCHECK(valid_);
     return logs_retained_bytes_;
@@ -115,6 +125,10 @@ class MaintenanceOpStats {
   // around.  This number is used to decide when to start freeing memory, so it
   // should be fairly accurate.  May be 0.
   uint64_t ram_anchored_;
+
+  // The approximate amount of disk space that not doing this operation keeps us from GCing from
+  // the data blocks. May be 0.
+  int64_t data_retained_bytes_;
 
   // The approximate amount of disk space that not doing this operation keeps us from GCing from
   // the logs. May be 0.

@@ -348,6 +348,17 @@ class DiskRowSet : public RowSet {
 
   double DeltaStoresCompactionPerfImprovementScore(DeltaCompactionType type) const OVERRIDE;
 
+  Status InitAncientUndoDeltas(Timestamp ancient_history_mark,
+                               int64_t max_deltas_to_initialize,
+                               MonoTime deadline,
+                               int64_t* num_deltas_initialized,
+                               int64_t* bytes_in_ancient_undos) OVERRIDE;
+
+  Status DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
+                                 int64_t max_deltas_to_delete,
+                                 int64_t* num_deltas_deleted,
+                                 int64_t* bytes_deleted) OVERRIDE;
+
   // Major compacts all the delta files for all the columns.
   Status MajorCompactDeltaStores(HistoryGcOpts history_gc_opts);
 

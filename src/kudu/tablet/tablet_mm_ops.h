@@ -125,6 +125,27 @@ class MajorDeltaCompactionOp : public TabletOpBase {
   uint64_t last_num_rs_major_delta_compacted_;
 };
 
+// MaintenanceOp to garbage-collect undo delta files that are older than the
+// ancient history mark.
+class UndoDeltaFileGCOp : public TabletOpBase {
+ public:
+  explicit UndoDeltaFileGCOp(Tablet* tablet);
+
+  virtual void UpdateStats(MaintenanceOpStats* stats) OVERRIDE;
+
+  virtual bool Prepare() OVERRIDE;
+
+  virtual void Perform() OVERRIDE;
+
+  virtual scoped_refptr<Histogram> DurationHistogram() const OVERRIDE;
+
+  virtual scoped_refptr<AtomicGauge<uint32_t> > RunningGauge() const OVERRIDE;
+
+ private:
+  mutable simple_spinlock lock_;
+  MaintenanceOpStats prev_stats_;
+};
+
 } // namespace tablet
 } // namespace kudu
 
