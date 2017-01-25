@@ -740,6 +740,26 @@ double DiskRowSet::DeltaStoresCompactionPerfImprovementScore(DeltaCompactionType
   return std::min(1.0, perf_improv);
 }
 
+Status DiskRowSet::InitAncientUndoDeltas(Timestamp ancient_history_mark,
+                                         int64_t max_deltas_to_initialize,
+                                         MonoTime deadline,
+                                         int64_t* num_deltas_initialized,
+                                         int64_t* bytes_in_ancient_undos) {
+  TRACE_EVENT0("tablet", "DiskRowSet::InitAncientUndoDeltas");
+  return delta_tracker_->InitAncientUndoDeltas(
+      ancient_history_mark, max_deltas_to_initialize, deadline,
+      num_deltas_initialized, bytes_in_ancient_undos);
+}
+
+Status DiskRowSet::DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
+                                           int64_t max_deltas_to_delete,
+                                           int64_t* num_deltas_deleted,
+                                           int64_t* bytes_deleted) {
+  TRACE_EVENT0("tablet", "DiskRowSet::DeleteAncientUndoDeltas");
+  return delta_tracker_->DeleteAncientUndoDeltas(ancient_history_mark, max_deltas_to_delete,
+                                                 num_deltas_deleted, bytes_deleted);
+}
+
 Status DiskRowSet::DebugDump(vector<string> *lines) {
   // Using CompactionInput to dump our data is an easy way of seeing all the
   // rows and deltas.

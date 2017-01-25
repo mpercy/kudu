@@ -17,6 +17,7 @@
 
 #include "kudu/tablet/delta_tracker.h"
 
+#include <boost/range/adaptor/reversed.hpp>
 #include <glog/stl_logging.h>
 #include <mutex>
 #include <set>
@@ -331,6 +332,92 @@ Status DeltaTracker::CompactStores(int start_idx, int end_idx) {
                         << " } into block " << new_block_id;
   RETURN_NOT_OK_PREPEND(CommitDeltaUpdate(update, compacted_stores, new_blocks, REDO),
                         "DeltaTracker: CompactStores: Unable to commit delta update");
+  return Status::OK();
+}
+
+Status DeltaTracker::InitAncientUndoDeltas(Timestamp ancient_history_mark,
+                                           int64_t max_deltas_to_initialize,
+                                           MonoTime deadline,
+                                           int64_t* num_deltas_initialized,
+                                           int64_t* bytes_in_ancient_undos) {
+  SharedDeltaStoreVector undos;
+  CollectStores(&undos, UNDOS_ONLY);
+  int64_t tmp_num_deltas_initialized = 0;
+  int64_t tmp_num_bytes_in_ancient_undos = 0;
+
+  // Traverse oldest-first. Undo deltas are stored in decreasing timestamp order.
+  for (auto& undo : boost::adaptors::reverse(undos)) {
+    if (!undo->Initted()) {
+      if (max_deltas_to_initialize != -1 &&
+          tmp_num_deltas_initialized == max_deltas_to_initialize) break;
+      RETURN_NOT_OK(undo->Init());
+      tmp_num_deltas_initialized++;
+    }
+
+    // Stop initializing delta files once we start hitting newer deltas that
+    // are not GC'able.
+    if (ancient_history_mark != Timestamp::kInvalidTimestamp &&
+        undo->delta_stats().max_timestamp() > ancient_history_mark) break;
+
+    // We only want to count the bytes in the ancient undos so this needs to
+    // come after the short-circuit above.
+    tmp_num_bytes_in_ancient_undos += undo->EstimateSize();
+
+    if (deadline.Initialized() && MonoTime::Now() >= deadline) break;
+  }
+
+  if (num_deltas_initialized) *num_deltas_initialized = tmp_num_deltas_initialized;
+  if (bytes_in_ancient_undos) *bytes_in_ancient_undos = tmp_num_bytes_in_ancient_undos;
+  return Status::OK();
+}
+
+Status DeltaTracker::DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
+                                             int64_t max_deltas_to_delete,
+                                             int64_t* num_deltas_deleted,
+                                             int64_t* bytes_deleted) {
+  if (ancient_history_mark == Timestamp::kInvalidTimestamp) {
+    return Status::InvalidArgument("ancient_history_mark must not be an invalid timestamp");
+  }
+
+  // This is effectively a compaction so we need to protect write access to the
+  // deltas in order to consistently make changes to them.
+  std::lock_guard<Mutex> l(compact_flush_lock_);
+
+  // Get the list of undo deltas.
+  SharedDeltaStoreVector undos;
+  CollectStores(&undos, UNDOS_ONLY);
+
+  if (undos.empty()) {
+    *num_deltas_deleted = 0;
+    *bytes_deleted = 0;
+    return Status::OK();
+  }
+
+  SharedDeltaStoreVector undos_to_remove;
+  vector<BlockId> block_ids_to_remove;
+
+  int64_t tmp_num_deltas_deleted = 0;
+  int64_t tmp_bytes_deleted = 0;
+
+  // Traverse oldest-first. Undo deltas are stored in decreasing timestamp order.
+  for (auto& undo : boost::adaptors::reverse(undos)) {
+    if (!undo->Initted()) break; // Never initialize the deltas in this code path (it's slow).
+    if (undo->delta_stats().max_timestamp() > ancient_history_mark) break;
+    if (max_deltas_to_delete != -1 && undos_to_remove.size() == max_deltas_to_delete) break;
+    tmp_num_deltas_deleted++;
+    tmp_bytes_deleted += undo->EstimateSize();
+    // This is always a safe downcast because UNDO deltas are always on disk.
+    block_ids_to_remove.push_back(down_cast<DeltaFileReader*>(undo.get())->block_id());
+    undos_to_remove.push_back(std::move(undo));
+  }
+  undos.clear(); // We did a std::move() on some elements from this vector above.
+
+  RowSetMetadataUpdate update;
+  update.RemoveUndoDeltaBlocks(block_ids_to_remove);
+  RETURN_NOT_OK(CommitDeltaUpdate(update, undos_to_remove, {}, UNDO));
+
+  if (num_deltas_deleted) *num_deltas_deleted = tmp_num_deltas_deleted;
+  if (bytes_deleted) *bytes_deleted = tmp_bytes_deleted;
   return Status::OK();
 }
 

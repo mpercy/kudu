@@ -80,12 +80,15 @@ struct TabletMetrics {
   scoped_refptr<AtomicGauge<uint32_t> > compact_rs_running;
   scoped_refptr<AtomicGauge<uint32_t> > delta_minor_compact_rs_running;
   scoped_refptr<AtomicGauge<uint32_t> > delta_major_compact_rs_running;
+  scoped_refptr<AtomicGauge<uint32_t> > undo_deltafile_gc_delete_running;
 
   scoped_refptr<Histogram> flush_dms_duration;
   scoped_refptr<Histogram> flush_mrs_duration;
   scoped_refptr<Histogram> compact_rs_duration;
   scoped_refptr<Histogram> delta_minor_compact_rs_duration;
   scoped_refptr<Histogram> delta_major_compact_rs_duration;
+  scoped_refptr<Histogram> undo_deltafile_gc_init_duration;
+  scoped_refptr<Histogram> undo_deltafile_gc_delete_duration;
 
   scoped_refptr<Counter> leader_memory_pressure_rejections;
 };
