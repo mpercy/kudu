@@ -144,6 +144,14 @@ class DeltaTracker {
   // and if so, compact the stores.
   Status Compact();
 
+  // Persist the given delta updates to disk and then make them visible via the
+  // DeltaTracker. The 'compact_flush_lock_' should be acquired before calling
+  // this method.
+  Status CommitDeltaUpdate(const RowSetMetadataUpdate& update,
+                           const SharedDeltaStoreVector& to_remove,
+                           const vector<BlockId>& new_delta_blocks,
+                           DeltaType type);
+
   // Performs minor compaction on all REDO delta files between index
   // "start_idx" and "end_idx" (inclusive) and writes this to a
   // new REDO delta block. If "end_idx" is set to -1, then delta files at
@@ -238,6 +246,8 @@ class DeltaTracker {
                                          vector<std::shared_ptr<DeltaStore > > *target_stores,
                                          vector<BlockId> *target_blocks,
                                          std::unique_ptr<DeltaIterator> *out);
+
+  std::string LogPrefix() const;
 
   std::shared_ptr<RowSetMetadata> rowset_metadata_;
 

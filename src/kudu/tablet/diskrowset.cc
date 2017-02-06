@@ -537,7 +537,7 @@ Status DiskRowSet::MajorCompactDeltaStoresWithColumnIds(const vector<ColumnId>& 
   RowSetMetadataUpdate update;
   RETURN_NOT_OK(compaction->CreateMetadataUpdate(&update));
   RETURN_NOT_OK(rowset_metadata_->CommitUpdate(update));
-  RETURN_NOT_OK(rowset_metadata_->Flush());
+  CHECK_OK(rowset_metadata_->Flush());
 
   // Make the new base data and delta files visible.
   shared_ptr<CFileSet> new_base;
@@ -546,7 +546,7 @@ Status DiskRowSet::MajorCompactDeltaStoresWithColumnIds(const vector<ColumnId>& 
                                &new_base));
   {
     std::lock_guard<percpu_rwlock> lock(component_lock_);
-    RETURN_NOT_OK(compaction->UpdateDeltaTracker(delta_tracker_.get()));
+    CHECK_OK(compaction->UpdateDeltaTracker(delta_tracker_.get()));
     base_data_.swap(new_base);
   }
   return Status::OK();
