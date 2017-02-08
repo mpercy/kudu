@@ -143,7 +143,12 @@ class RowSet {
   // Compact delta stores if more than one.
   virtual Status MinorCompactDeltaStores() = 0;
 
-  // TODO: doc me
+  // Initialize up to 'max_deltas_to_initialize' deltas that while 'deadline' has
+  // not yet been passed and while a delta file with a max timestamp later than
+  // 'ancient_history_mark' has not yet been encountered. Return the number of
+  // deltas initialized during this invocation in 'num_deltas_initialized' and
+  // the total amount of on-disk data known to be entirely composed of ancient
+  // undo delta blocks in 'bytes_in_ancient_undos'.
   virtual Status InitAncientUndoDeltas(Timestamp ancient_history_mark,
                                        int64_t max_deltas_to_initialize,
                                        MonoTime deadline,

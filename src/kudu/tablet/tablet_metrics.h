@@ -87,7 +87,8 @@ struct TabletMetrics {
   scoped_refptr<Histogram> compact_rs_duration;
   scoped_refptr<Histogram> delta_minor_compact_rs_duration;
   scoped_refptr<Histogram> delta_major_compact_rs_duration;
-  scoped_refptr<Histogram> undo_deltafile_gc_duration;
+  scoped_refptr<Histogram> undo_deltafile_init_duration;
+  scoped_refptr<Histogram> undo_deltafile_delete_duration;
 
   scoped_refptr<Counter> leader_memory_pressure_rejections;
 };

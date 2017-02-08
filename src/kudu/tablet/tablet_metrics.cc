@@ -202,10 +202,15 @@ METRIC_DEFINE_histogram(tablet, delta_minor_compact_rs_duration,
   kudu::MetricUnit::kMilliseconds,
   "Time spent minor delta compacting.", 60000LU, 1);
 
-METRIC_DEFINE_histogram(tablet, delta_major_compact_rs_duration,
-  "Major Delta Compaction Duration",
+METRIC_DEFINE_histogram(tablet, undo_deltafile_gc_init_duration,
+  "Undo Deltafile GC Init Duration ",
   kudu::MetricUnit::kSeconds,
-  "Seconds spent major delta compacting.", 60000000LU, 2);
+  "Seconds spent initializing ancient undo deltafiles.", 60000000LU, 2);
+
+METRIC_DEFINE_histogram(tablet, undo_deltafile_gc_delete_duration,
+  "Undo Deltafile GC Delete Duration ",
+  kudu::MetricUnit::kSeconds,
+  "Seconds spent deleting ancient undo deltafiles.", 60000000LU, 2);
 
 METRIC_DEFINE_counter(tablet, leader_memory_pressure_rejections,
   "Leader Memory Pressure Rejections",
@@ -256,6 +261,8 @@ TabletMetrics::TabletMetrics(const scoped_refptr<MetricEntity>& entity)
     MINIT(compact_rs_duration),
     MINIT(delta_minor_compact_rs_duration),
     MINIT(delta_major_compact_rs_duration),
+    MINIT(undo_deltafile_gc_init_duration),
+    MINIT(undo_deltafile_gc_delete_duration),
     MINIT(leader_memory_pressure_rejections) {
 }
 #undef MINIT

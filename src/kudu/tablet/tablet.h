@@ -270,11 +270,13 @@ class Tablet {
   double GetPerfImprovementForBestDeltaCompactUnlocked(RowSet::DeltaCompactionType type,
                                                        std::shared_ptr<RowSet>* rs) const;
 
-  // FIXME: doc me
+  // Spend up to 'max_init_duration' time initializing ancient undo
+  // deltas and return the number of bytes found in ancient undo files
+  // in 'bytes_in_ancient_undos'.
   Status InitAncientUndoDeltas(MonoDelta max_init_duration, int64_t* bytes_in_ancient_undos);
 
-  // Finds and deletes all UNDO delta files that have a maximum op timestamp
-  // less than the ancient history mark.
+  // Find and delete all undo delta files that have a maximum op
+  // timestamp prior to the current ancient history mark.
   Status DeleteAncientUndoDeltas();
 
   // Return the current number of rowsets in the tablet.
