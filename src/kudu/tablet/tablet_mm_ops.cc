@@ -281,7 +281,7 @@ void UndoDeltaFileGCOp::Perform() {
 }
 
 scoped_refptr<Histogram> UndoDeltaFileGCOp::DurationHistogram() const {
-  return tablet_->metrics()->undo_deltafile_gc_duration;
+  return tablet_->metrics()->undo_deltafile_gc_delete_duration;
 }
 
 scoped_refptr<AtomicGauge<uint32_t> > UndoDeltaFileGCOp::RunningGauge() const {
