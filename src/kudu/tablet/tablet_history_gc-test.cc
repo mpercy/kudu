@@ -25,6 +25,7 @@
 #include "kudu/tablet/tablet_metrics.h"
 #include "kudu/tablet/tablet-test-base.h"
 
+DECLARE_bool(enable_maintenance_manager);
 DECLARE_int32(tablet_history_max_age_sec);
 DECLARE_bool(use_mock_wall_clock);
 
@@ -65,7 +66,8 @@ class TabletHistoryGcTest : public TabletTestBase<IntKeyTestSetup<INT64>> {
     NO_FLUSH
   };
 
-  void InsertOriginalRows(int num_rowsets, uint64_t rows_per_rowset);
+  void InsertOriginalRows(int64_t num_rowsets, int64_t rows_per_rowset);
+  void UpdateOriginalRows(int64_t num_rowsets, int64_t rows_per_rowset, int32_t val);
   void AddTimeToHybridClock(MonoDelta delta) {
     uint64_t now = HybridClock::GetPhysicalValueMicros(clock()->Now());
     uint64_t new_time = now + delta.ToMicroseconds();
@@ -87,11 +89,19 @@ class TabletHistoryGcTest : public TabletTestBase<IntKeyTestSetup<INT64>> {
   int rows_per_rowset_ = 300;
 };
 
-void TabletHistoryGcTest::InsertOriginalRows(int num_rowsets, uint64_t rows_per_rowset) {
-  ClampRowCount(num_rowsets * rows_per_rowset);
+void TabletHistoryGcTest::InsertOriginalRows(int64_t num_rowsets, int64_t rows_per_rowset) {
   for (int rowset_id = 0; rowset_id < num_rowsets; rowset_id++) {
     InsertTestRows(rowset_id * rows_per_rowset, rows_per_rowset, 0);
     ASSERT_OK(tablet()->Flush());
+  }
+  ASSERT_EQ(num_rowsets, tablet()->num_rowsets());
+}
+
+void TabletHistoryGcTest::UpdateOriginalRows(int64_t num_rowsets, int64_t rows_per_rowset,
+                                             int32_t val) {
+  for (int rowset_id = 0; rowset_id < num_rowsets; rowset_id++) {
+    UpsertTestRows(rowset_id * rows_per_rowset, rows_per_rowset, val);
+    ASSERT_OK(tablet()->FlushAllDMSForTests());
   }
   ASSERT_EQ(num_rowsets, tablet()->num_rowsets());
 }
@@ -508,6 +518,47 @@ TEST_F(TabletHistoryGcTest, TestGcWithConcurrentCompaction) {
         break;
     }
   }
+}
+
+// A version of the tablet history gc test with the maintenance manager disabled.
+class TabletHistoryGcNoMaintMgrTest : public TabletHistoryGcTest {
+ public:
+  void SetUp() override {
+    FLAGS_enable_maintenance_manager = false;
+    TabletHistoryGcTest::SetUp();
+  }
+};
+
+// Test that basic deletion of undo deltafiles prior to the AHM works.
+TEST_F(TabletHistoryGcNoMaintMgrTest, TestUndoDeltaGc) {
+  FLAGS_tablet_history_max_age_sec = 1000;
+
+  NO_FATALS(InsertOriginalRows(num_rowsets_, rows_per_rowset_));
+  ASSERT_EQ(num_rowsets_, tablet()->CountUndoDeltasForTests());
+
+  // Generate a bunch of redo deltas.
+  constexpr int kNumMutationsPerRow = 5;
+  for (int i = 0; i < kNumMutationsPerRow; i++) {
+    SCOPED_TRACE(i);
+    ASSERT_EQ((i + 1) * num_rowsets_, tablet()->CountUndoDeltasForTests());
+    NO_FATALS(AddTimeToHybridClock(MonoDelta::FromSeconds(1)));
+    NO_FATALS(UpdateOriginalRows(num_rowsets_, rows_per_rowset_, i));
+    ASSERT_OK(tablet()->MajorCompactAllDeltaStoresForTests());
+    ASSERT_EQ((i + 2) * num_rowsets_, tablet()->CountUndoDeltasForTests());
+  }
+
+  ASSERT_EQ(0, tablet()->CountRedoDeltasForTests()); // No deletes.
+  ASSERT_EQ((kNumMutationsPerRow + 1) * num_rowsets_,
+            tablet()->CountUndoDeltasForTests());
+
+  // Move the clock so all deltas should be ancient.
+  NO_FATALS(AddTimeToHybridClock(MonoDelta::FromSeconds(FLAGS_tablet_history_max_age_sec + 1)));
+
+  // Initialize and delete undos.
+  int64_t bytes_in_ancient_undos = 0;
+  ASSERT_OK(tablet()->InitAncientUndoDeltas(MonoDelta::FromSeconds(60), &bytes_in_ancient_undos));
+  ASSERT_OK(tablet()->DeleteAncientUndoDeltas());
+  ASSERT_EQ(0, tablet()->CountUndoDeltasForTests());
 }
 
 } // namespace tablet

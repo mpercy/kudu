@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <glog/logging.h>
+#include <glog/stl_logging.h>
 #include <mutex>
 #include <vector>
 
@@ -515,6 +516,7 @@ Status DiskRowSet::MajorCompactDeltaStores(HistoryGcOpts history_gc_opts) {
   delta_tracker_->GetColumnIdsWithUpdates(&col_ids);
 
   if (col_ids.empty()) {
+    VLOG_WITH_PREFIX(2) << "There are no column ids with updates";
     return Status::OK();
   }
 
@@ -523,7 +525,8 @@ Status DiskRowSet::MajorCompactDeltaStores(HistoryGcOpts history_gc_opts) {
 
 Status DiskRowSet::MajorCompactDeltaStoresWithColumnIds(const vector<ColumnId>& col_ids,
                                                         HistoryGcOpts history_gc_opts) {
-  TRACE_EVENT0("tablet", "DiskRowSet::MajorCompactDeltaStores");
+  LOG_WITH_PREFIX(INFO) << "Major compacting REDO delta stores (cols: " << col_ids << ")";
+  TRACE_EVENT0("tablet", "DiskRowSet::MajorCompactDeltaStoresWithColumnIds");
   std::lock_guard<Mutex> l(*delta_tracker()->compact_flush_lock());
 
   // TODO: do we need to lock schema or anything here?
@@ -735,7 +738,7 @@ double DiskRowSet::DeltaStoresCompactionPerfImprovementScore(DeltaCompactionType
       perf_improv = static_cast<double>(store_count) / FLAGS_tablet_delta_store_minor_compact_max;
     }
   } else {
-    LOG(FATAL) << "Unknown delta compaction type " << type;
+    LOG_WITH_PREFIX(FATAL) << "Unknown delta compaction type " << type;
   }
   return std::min(1.0, perf_improv);
 }

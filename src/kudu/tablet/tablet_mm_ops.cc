@@ -23,9 +23,11 @@
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_metrics.h"
 
-DEFINE_int32(mm_init_undo_deltas_millis_per_cycle, 100,
-             "The maximum number of milliseconds we will spend opened undo "
-             "delta files per maintenance manager cycle");
+DEFINE_int32(mm_init_undo_deltas_budget_millis, 100,
+             "The maximum number of milliseconds we will spend initializing "
+             "undo delta files per maintenance manager cycle. Existing delta "
+             "files must be initialized once per process startup to determine "
+             "when they can be deleted.");
 
 using std::string;
 using strings::Substitute;
@@ -263,7 +265,7 @@ void UndoDeltaFileGCOp::UpdateStats(MaintenanceOpStats* stats) {
   MonoTime start = MonoTime::Now();
   int64_t bytes_in_ancient_undos = 0;
   WARN_NOT_OK(tablet_->InitAncientUndoDeltas(
-      MonoDelta::FromMilliseconds(FLAGS_mm_init_undo_deltas_millis_per_cycle),
+      MonoDelta::FromMilliseconds(FLAGS_mm_init_undo_deltas_budget_millis),
       &bytes_in_ancient_undos),
       Substitute("$0Unable to initialize old undo delta files on tablet $1",
                  LogPrefix(), tablet_->tablet_id()));

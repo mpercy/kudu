@@ -232,6 +232,9 @@ class DeltaTracker {
     return &compact_flush_lock_;
   }
 
+  // Init() all delta stores. For tests only.
+  Status InitAllDeltaStoresForTests(WhichStores stores);
+
  private:
   FRIEND_TEST(TestRowSet, TestRowSetUpdate);
   FRIEND_TEST(TestRowSet, TestDMSFlush);

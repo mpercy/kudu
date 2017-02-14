@@ -378,6 +378,13 @@ class DiskRowSet : public RowSet {
     return rowset_metadata_->ToString();
   }
 
+  std::string LogPrefix() const {
+    return strings::Substitute("T $0 P $1: $2: ",
+        rowset_metadata_->tablet_metadata()->tablet_id(),
+        rowset_metadata_->fs_manager()->uuid(),
+        ToString());
+  }
+
   virtual Status DebugDump(std::vector<std::string> *out = NULL) OVERRIDE;
 
  private:

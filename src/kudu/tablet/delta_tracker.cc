@@ -241,7 +241,8 @@ Status DeltaTracker::AtomicUpdateStores(const SharedDeltaStoreVector& stores_to_
     for (const shared_ptr<DeltaStore>& ds : stores_to_replace) {
       if (end_it == stores_to_update->end() || *end_it != ds) {
         return Status::InvalidArgument(
-            strings::Substitute("Cannot find deltastore sequence <$0> in <$1>",
+            strings::Substitute("Cannot find $0 deltastore sequence <$1> in <$2>",
+                                DeltaType_Name(type),
                                 JoinDeltaStoreStrings(stores_to_replace),
                                 JoinDeltaStoreStrings(*stores_to_update)));
       }
@@ -357,7 +358,7 @@ Status DeltaTracker::InitAncientUndoDeltas(Timestamp ancient_history_mark,
     // Stop initializing delta files once we start hitting newer deltas that
     // are not GC'able.
     if (ancient_history_mark != Timestamp::kInvalidTimestamp &&
-        undo->delta_stats().max_timestamp() > ancient_history_mark) break;
+        undo->delta_stats().max_timestamp() >= ancient_history_mark) break;
 
     // We only want to count the bytes in the ancient undos so this needs to
     // come after the short-circuit above.
@@ -402,7 +403,7 @@ Status DeltaTracker::DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
   // Traverse oldest-first. Undo deltas are stored in decreasing timestamp order.
   for (auto& undo : boost::adaptors::reverse(undos)) {
     if (!undo->Initted()) break; // Never initialize the deltas in this code path (it's slow).
-    if (undo->delta_stats().max_timestamp() > ancient_history_mark) break;
+    if (undo->delta_stats().max_timestamp() >= ancient_history_mark) break;
     if (max_deltas_to_delete != -1 && undos_to_remove.size() == max_deltas_to_delete) break;
     tmp_num_deltas_deleted++;
     tmp_bytes_deleted += undo->EstimateSize();
@@ -411,6 +412,8 @@ Status DeltaTracker::DeleteAncientUndoDeltas(Timestamp ancient_history_mark,
     undos_to_remove.push_back(std::move(undo));
   }
   undos.clear(); // We did a std::move() on some elements from this vector above.
+  // We iterated in reverse order and CommitDeltaUpdate() requires storage order.
+  std::reverse(undos_to_remove.begin(), undos_to_remove.end());
 
   RowSetMetadataUpdate update;
   update.RemoveUndoDeltaBlocks(block_ids_to_remove);
@@ -696,6 +699,21 @@ void DeltaTracker::GetColumnIdsWithUpdates(std::vector<ColumnId>* col_ids) const
     ds->delta_stats().AddColumnIdsWithUpdates(&column_ids_with_updates);
   }
   col_ids->assign(column_ids_with_updates.begin(), column_ids_with_updates.end());
+}
+
+Status DeltaTracker::InitAllDeltaStoresForTests(WhichStores stores) {
+  shared_lock<rw_spinlock> lock(component_lock_);
+  if (stores == UNDOS_AND_REDOS || UNDOS_ONLY) {
+    for (const shared_ptr<DeltaStore>& ds : undo_delta_stores_) {
+      RETURN_NOT_OK(ds->Init());
+    }
+  }
+  if (stores == UNDOS_AND_REDOS || REDOS_ONLY) {
+    for (const shared_ptr<DeltaStore>& ds : redo_delta_stores_) {
+      RETURN_NOT_OK(ds->Init());
+    }
+  }
+  return Status::OK();
 }
 
 string DeltaTracker::LogPrefix() const {

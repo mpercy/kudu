@@ -1641,6 +1641,31 @@ Status Tablet::FlushBiggestDMS() {
   return max_size > 0 ? biggest_drs->FlushDeltas() : Status::OK();
 }
 
+Status Tablet::FlushAllDMSForTests() {
+  CHECK_EQ(state_, kOpen);
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+  for (const auto& rowset : comps->rowsets->all_rowsets()) {
+    RETURN_NOT_OK(rowset->FlushDeltas());
+  }
+  return Status::OK();
+}
+
+Status Tablet::MajorCompactAllDeltaStoresForTests() {
+  LOG_WITH_PREFIX(INFO) << "Major compacting all delta stores";
+  CHECK_EQ(state_, kOpen);
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+  for (const auto& rs : comps->rowsets->all_rowsets()) {
+    if (!rs->IsAvailableForCompaction()) continue;
+    DiskRowSet* drs = down_cast<DiskRowSet*>(rs.get());
+    RETURN_NOT_OK(drs->delta_tracker()->InitAllDeltaStoresForTests(DeltaTracker::REDOS_ONLY));
+    RETURN_NOT_OK_PREPEND(drs->MajorCompactDeltaStores(
+        GetHistoryGcOpts()), "Failed major delta compaction on " + rs->ToString());
+  }
+  return Status::OK();
+}
+
 Status Tablet::CompactWorstDeltas(RowSet::DeltaCompactionType type) {
   CHECK_EQ(state_, kOpen);
   shared_ptr<RowSet> rs;
@@ -1755,6 +1780,26 @@ Status Tablet::DeleteAncientUndoDeltas() {
                                                   &num_deltas_deleted, &bytes_deleted));
   }
   return Status::OK();
+}
+
+int64_t Tablet::CountUndoDeltasForTests() const {
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+  int64_t sum = 0;
+  for (const auto& rowset : comps->rowsets->all_rowsets()) {
+    sum += rowset->metadata()->undo_delta_blocks().size();
+  }
+  return sum;
+}
+
+int64_t Tablet::CountRedoDeltasForTests() const {
+  scoped_refptr<TabletComponents> comps;
+  GetComponents(&comps);
+  int64_t sum = 0;
+  for (const auto& rowset : comps->rowsets->all_rowsets()) {
+    sum += rowset->metadata()->redo_delta_blocks().size();
+  }
+  return sum;
 }
 
 size_t Tablet::num_rowsets() const {

@@ -254,6 +254,13 @@ class Tablet {
   // Flush only the biggest DMS
   Status FlushBiggestDMS();
 
+  // Flush all delta memstores. Only used for tests.
+  Status FlushAllDMSForTests();
+
+  // Run a major compaction on all delta stores. Initializes any un-initialized
+  // redo deltas stores. Only used for tests.
+  Status MajorCompactAllDeltaStoresForTests();
+
   // Finds the RowSet which has the most separate delta files and
   // issues a delta compaction.
   Status CompactWorstDeltas(RowSet::DeltaCompactionType type);
@@ -278,6 +285,10 @@ class Tablet {
   // Find and delete all undo delta files that have a maximum op
   // timestamp prior to the current ancient history mark.
   Status DeleteAncientUndoDeltas();
+
+  // Count the number of deltas in the tablet. Only used for tests.
+  int64_t CountUndoDeltasForTests() const;
+  int64_t CountRedoDeltasForTests() const;
 
   // Return the current number of rowsets in the tablet.
   size_t num_rowsets() const;
