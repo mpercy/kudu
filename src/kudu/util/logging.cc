@@ -268,7 +268,7 @@ void InitGoogleLoggingSafe(const char* arg) {
 
   // Ignore SIGPIPE early in the startup process so that threads writing to TLS
   // sockets do not crash when writing to a closed socket. See KUDU-1910.
-  IgnoreSigPipe();
+  IgnoreSignal(SIGPIPE);
 
   // For minidump support. Must be called before logging threads started.
   CHECK_OK(BlockSigUSR1());

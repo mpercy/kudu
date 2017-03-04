@@ -30,13 +30,30 @@ typedef sig_t SignalHandlerCallback;
 // Set a process-wide signal handler.
 void SetSignalHandler(int signal, SignalHandlerCallback handler);
 
-// Set the disposition of SIGPIPE to SIG_IGN.
-void IgnoreSigPipe();
+// Set the disposition of the specified signal to SIG_IGN.
+void IgnoreSignal(int signal);
 
-// Set the disposition of SIGPIPE to SIG_DFL.
-void ResetSigPipeHandlerToDefault();
+// Set the disposition of the specified signal to SIG_DFL.
+void ResetSignalHandlerToDefault(int signal);
 
-// Unblock all signal masks.
+// Begin blocking the specified signal in the current thread and any threads
+// spawned by the current thread.
+void BlockSignal(int signal);
+
+// Consume a pending (blocked) signal of the specified type. Does not block.
+// Returns true if there was a signal pending, false if not.
+bool ConsumePendingSignal(int signal);
+
+// Stop blocking the specified signal in the current thread.
+void UnblockSignal(int signal);
+
+// Returns whether the given signal is blocked in the current thread.
+bool IsSignalBlocked(int signal);
+
+// Returns whether the given signal is pending in the current thread.
+bool IsSignalPending(int signal);
+
+// Unblock all signals in the current thread.
 void ResetAllSignalMasksToUnblocked();
 
 } // namespace kudu

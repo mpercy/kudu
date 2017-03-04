@@ -310,9 +310,6 @@ Status Subprocess::Start() {
     return Status::InvalidArgument("argv must have at least one elem");
   }
 
-  // We explicitly set SIGPIPE to SIG_IGN here because we are using UNIX pipes.
-  IgnoreSigPipe();
-
   vector<char*> argv_ptrs;
   for (const string& arg : argv_) {
     argv_ptrs.push_back(const_cast<char*>(arg.c_str()));
@@ -405,7 +402,7 @@ Status Subprocess::Start() {
     // Reset the disposition of SIGPIPE to SIG_DFL because we routinely set its
     // disposition to SIG_IGN via IgnoreSigPipe(). At the time of writing, we
     // don't explicitly ignore any other signals in Kudu.
-    ResetSigPipeHandlerToDefault();
+    ResetSignalHandlerToDefault(SIGPIPE);
 
     // Set the environment for the subprocess. This is more portable than
     // using execvpe(), which doesn't exist on OS X. We rely on the 'p'
@@ -554,9 +551,23 @@ Status Subprocess::Call(const vector<string>& argv,
   RETURN_NOT_OK_PREPEND(p.Start(),
                         "Unable to fork " + argv[0]);
 
-  if (!stdin_in.empty() &&
-      write(p.to_child_stdin_fd(), stdin_in.data(), stdin_in.size()) < stdin_in.size()) {
-    return Status::IOError("Unable to write to child process stdin", ErrnoToString(errno), errno);
+  if (!stdin_in.empty()) {
+    // Writing to a closed pipe may generate a PIPE signal, so we temporarily
+    // block SIGPIPE in this thread if it's not already explicitly blocked.
+    bool sigpipe_previously_blocked = IsSignalBlocked(SIGPIPE);
+    if (!sigpipe_previously_blocked) {
+      BlockSignal(SIGPIPE);
+    }
+    ssize_t bytes_written = write(p.to_child_stdin_fd(), stdin_in.data(), stdin_in.size());
+    int errno_saved = errno;
+    if (!sigpipe_previously_blocked) {
+      ConsumePendingSignal(SIGPIPE);
+      UnblockSignal(SIGPIPE);
+    }
+    if (bytes_written < stdin_in.size()) {
+      return Status::IOError("Unable to write to child process stdin",
+                             ErrnoToString(errno_saved), errno_saved);
+    }
   }
 
   int err = close(p.ReleaseChildStdinFd());

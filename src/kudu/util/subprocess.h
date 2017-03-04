@@ -126,6 +126,9 @@ class Subprocess {
 
   // Return the pipe fd to the child's standard stream.
   // Stream should not be disabled or shared.
+  // Note that writing to the child's stdin may generate a SIGPIPE if the child
+  // process has exited or closed its end of the pipe. The writer thread may
+  // want to block SIGPIPE while writing to the child.
   int to_child_stdin_fd()    const { return CheckAndOffer(STDIN_FILENO); }
   int from_child_stdout_fd() const { return CheckAndOffer(STDOUT_FILENO); }
   int from_child_stderr_fd() const { return CheckAndOffer(STDERR_FILENO); }
