@@ -152,7 +152,7 @@ std::string OpsRangeString(const ConsensusRequestPB& req) {
   return ret;
 }
 
-OpId MakeOpId(int term, int index) {
+OpId MakeOpId(int64_t term, int64_t index) {
   OpId ret;
   ret.set_index(index);
   ret.set_term(term);

@@ -106,7 +106,7 @@ std::string OpIdToString(const OpId& id);
 
 std::string OpsRangeString(const ConsensusRequestPB& req);
 
-OpId MakeOpId(int term, int index);
+OpId MakeOpId(int64_t term, int64_t index);
 
 }  // namespace consensus
 }  // namespace kudu
