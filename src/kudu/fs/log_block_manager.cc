@@ -1258,18 +1258,6 @@ LogBlockManager::LogBlockManager(Env* env, const BlockManagerOptions& opts)
                                             opts.metric_entity));
   }
 
-  // HACK: when running in a test environment, we often instantiate many
-  // LogBlockManagers in the same process, eg corresponding to different
-  // tablet servers in a minicluster, or due to running many separate test
-  // cases of some CFile-related code. In that case, we need to make it more
-  // likely that the block IDs are not reused. So, instead of starting with
-  // block ID 1, we'll start with a random block ID. A collision is still
-  // possible, but exceedingly unlikely.
-  if (IsGTest()) {
-    Random r(GetRandomSeed32());
-    next_block_id_.Store(r.Next64());
-  }
-
   if (opts.metric_entity) {
     metrics_.reset(new internal::LogBlockManagerMetrics(opts.metric_entity));
   }

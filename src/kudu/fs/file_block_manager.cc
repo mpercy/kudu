@@ -508,7 +508,7 @@ FileBlockManager::FileBlockManager(Env* env, const BlockManagerOptions& opts)
     read_only_(opts.read_only),
     dd_manager_(env, opts.metric_entity, kBlockManagerType, opts.root_paths),
     rand_(GetRandomSeed32()),
-    next_block_id_(rand_.Next64()),
+    next_block_id_(1),
     mem_tracker_(MemTracker::CreateTracker(-1,
                                            "file_block_manager",
                                            opts.parent_mem_tracker)) {

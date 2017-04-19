@@ -16,6 +16,8 @@
 // under the License.
 #include "kudu/tserver/tablet_copy-test-base.h"
 
+#include <glog/stl_logging.h>
+
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/strings/fastmem.h"
 #include "kudu/tablet/tablet_bootstrap.h"
@@ -243,12 +245,32 @@ enum DeleteTrigger {
 
 class TabletCopyClientAbortTest : public TabletCopyClientTest,
                                   public ::testing::WithParamInterface<DeleteTrigger> {
+ protected:
+  // Create the specified number of blocks with junk data for testing purposes.
+  void CreateTestBlocks(int num_blocks);
 };
+
+void TabletCopyClientAbortTest::CreateTestBlocks(int num_blocks) {
+  for (int i = 0; i < num_blocks; i++) {
+    unique_ptr<fs::WritableBlock> block;
+    ASSERT_OK(fs_manager_->CreateNewBlock(&block));
+    block->Append("Test");
+    ASSERT_OK(block->Close());
+  }
+}
 
 // Test that we can clean up our downloaded blocks either explicitly using
 // Abort() or implicitly by destroying the TabletCopyClient instance before
 // calling Finish().
 TEST_P(TabletCopyClientAbortTest, TestAbort) {
+  // Create some blocks to ensure that we don't lose any existing data on abort.
+  const int kNumBlocksToCreate = 100;
+  NO_FATALS(CreateTestBlocks(kNumBlocksToCreate));
+
+  vector<BlockId> blocks;
+  ASSERT_OK(fs_manager_->block_manager()->GetAllBlockIds(&blocks));
+  ASSERT_EQ(kNumBlocksToCreate, blocks.size());
+  VLOG(1) << "Local blocks: " << blocks;
   // Download a block.
   BlockIdPB* block_id_pb = FirstColumnBlockIdPB(client_->superblock_.get());
   int block_id_count = 0;
@@ -291,6 +313,12 @@ TEST_P(TabletCopyClientAbortTest, TestAbort) {
     ASSERT_EQ(tablet::TABLET_DATA_TOMBSTONED, meta->tablet_data_state());
     ASSERT_FALSE(fs_manager_->BlockExists(new_block_id));
     ASSERT_FALSE(fs_manager_->Exists(wal_path));
+    vector<BlockId> latest_blocks;
+    fs_manager_->block_manager()->GetAllBlockIds(&latest_blocks);
+    ASSERT_EQ(blocks.size(), latest_blocks.size());
+  }
+  for (const auto& block : blocks) {
+    ASSERT_TRUE(fs_manager_->BlockExists(block)) << "Missing block: " << block;
   }
 }
 
