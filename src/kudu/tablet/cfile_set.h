@@ -47,6 +47,7 @@ class optional;
 
 namespace kudu {
 
+class KuduPartialRow;
 class ColumnMaterializationContext;
 class MemTracker;
 class ScanSpec;
@@ -200,6 +201,19 @@ class CFileSet::Iterator : public ColumnwiseIterator {
     return cur_idx_;
   }
 
+  // This function is used to place the validx_iter_ at the next greater "prefix_key".
+  // "prefix_key" refers to the first "num_cols" columns of the current key.
+  // (current key is the key currently pointed to by validx_iter_)
+  Status SeekToNextPrefixKey(size_t num_cols);
+
+  // Constructs a partial row to replace the "suffix_key" column value in the current key
+  // pointed to by the validx_iter_ with the "suffix_key" equality predicate value
+  void BuildNewPartialRow(KuduPartialRow *p_row);
+
+  // Check if the raw key value at the given col_id matches with the
+  // entry currently pointed to by validx_iter_
+  bool CheckKeyMatch(const std::vector<const void *> &raw_keys, size_t col_id);
+
   // Collect the IO statistics for each of the underlying columns.
   virtual void GetIteratorStats(std::vector<IteratorStats> *stats) const OVERRIDE;
 
@@ -224,6 +238,14 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   // column's index. If such a predicate exists, remove it from the scan spec and
   // store it in member fields.
   Status PushdownRangeScanPredicate(ScanSpec *spec);
+
+  // Currently, skip scan will be used if there exists an equality predicate on
+  // any of the non-first primary key(PK) columns.
+  // If the equality predicate consists of multiple non-first PK columns,
+  // the column with the minimum id will be called the "suffix_key" and
+  // consequently, all it's preceding columns will be called the
+  // "prefix_key" for the skip scan approach.
+  bool CanUseSkipScan(ScanSpec *spec);
 
   void Unprepare();
 
@@ -257,6 +279,18 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   // materialized, it doesn't need to be read off disk.
   std::vector<bool> cols_prepared_;
 
+  // Flag for whether index skip scan is enabled
+  bool skip_scan_enabled_ = false;
+
+  // Equality predicate value on the "suffix_key"
+  const void* suffix_key_pred_value_;
+
+  // Column id of the "suffix_key"
+  int suffix_key_column_id_;
+
+  // Row id of the last entry of "suffix_key" predicate value wrt to the
+  // "prefix_key" currently pointed to by validx_iter_
+  int suffix_key_upper_bound_idx_ = -1;
 };
 
 } // namespace tablet

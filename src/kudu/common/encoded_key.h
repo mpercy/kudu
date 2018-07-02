@@ -60,7 +60,7 @@ class EncodedKey {
   // Given an EncodedKey, increment it to the next lexicographically greater EncodedKey.
   static Status IncrementEncodedKey(const Schema& tablet_schema,
                                     gscoped_ptr<EncodedKey>* key,
-                                    Arena* arena);
+                                    Arena* arena, int num_columns = 0);
 
   const Slice &encoded_key() const { return encoded_key_; }
 

@@ -774,9 +774,31 @@ Status CFileIterator::SeekToFirst() {
   last_prepare_count_ = 0;
 
   prepared_blocks_.push_back(b.release());
-
+  if (PREDICT_TRUE(validx_iter_ != nullptr)) {
+    SetCurrentValue();
+  }
   seeked_ = idx_iter;
   return Status::OK();
+}
+
+Status CFileIterator::SetCurrentValue() {
+  Slice ret;
+  Arena arena(1024);
+
+  PreparedBlock *pblk = prepared_blocks_.back();
+  ColumnBlock cb(reader_->type_info(), nullptr, &ret, 1, &arena);
+  ColumnDataView cdv(&cb);
+  size_t n = 1;
+  RETURN_NOT_OK(pblk->dblk_->CopyNextValues(&n, &cdv));
+
+  Slice* out = reinterpret_cast<Slice*>(cdv.data());
+  cur_val_ = out->ToString();
+
+  return Status::OK();
+}
+
+string CFileIterator::GetCurrentValue() {
+  return cur_val_;
 }
 
 Status CFileIterator::SeekAtOrAfter(const EncodedKey &key,
@@ -837,7 +859,9 @@ Status CFileIterator::SeekAtOrAfter(const EncodedKey &key,
   last_prepare_count_ = 0;
 
   prepared_blocks_.push_back(b.release());
-
+  if (PREDICT_TRUE(validx_iter_ != nullptr)) {
+    SetCurrentValue();
+  }
   seeked_ = validx_iter_.get();
   return Status::OK();
 }

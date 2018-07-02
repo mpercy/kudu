@@ -20,6 +20,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -34,13 +35,17 @@
 #include "kudu/cfile/cfile_reader.h"
 #include "kudu/cfile/cfile_util.h"
 #include "kudu/common/column_materialization_context.h"
+#include "kudu/common/column_predicate.h"
 #include "kudu/common/columnblock.h"
 #include "kudu/common/encoded_key.h"
 #include "kudu/common/iterator_stats.h"
+#include "kudu/common/partial_row.h"
+#include "kudu/common/row.h"
 #include "kudu/common/rowblock.h"
 #include "kudu/common/rowid.h"
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
+#include "kudu/common/types.h"
 #include "kudu/fs/block_id.h"
 #include "kudu/fs/block_manager.h"
 #include "kudu/fs/fs_manager.h"
@@ -50,12 +55,14 @@
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/stringprintf.h"
+#include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/diskrowset.h"
 #include "kudu/tablet/rowset.h"
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/util/flag_tags.h"
 #include "kudu/util/logging.h"
+#include "kudu/util/memory/arena.h"
 #include "kudu/util/slice.h"
 #include "kudu/util/status.h"
 
@@ -63,6 +70,8 @@ DEFINE_bool(consult_bloom_filters, true, "Whether to consult bloom filters on ro
 TAG_FLAG(consult_bloom_filters, hidden);
 
 DECLARE_bool(rowset_metadata_store_keys);
+
+DEFINE_bool(enable_skip_scan, true, "Whether to enable index skip scan");
 
 namespace kudu {
 
@@ -387,6 +396,50 @@ Status CFileSet::Iterator::Init(ScanSpec *spec) {
   return Status::OK();
 }
 
+bool CFileSet::Iterator::CanUseSkipScan(ScanSpec *spec) {
+  int num_key_cols =  base_data_->tablet_schema().num_key_columns();
+
+  if (!FLAGS_enable_skip_scan || num_key_cols <= 1) {
+    return false;
+  }
+
+  // Return if primary key push down has already occurred
+  if (!(lower_bound_idx_ == 0 && upper_bound_idx_ == row_count_)) {
+    return false;
+  }
+
+  bool nonfirst_key_pred_exists = false;
+  suffix_key_column_id_ = num_key_cols; // Initialize "suffix_key" column id to an upperbound value
+
+  std::unordered_map<std::string, ColumnPredicate> predicates = spec->predicates();
+  for (auto it=predicates.begin(); it!=predicates.end(); ++it) {
+
+    // Get the column id from the predicate
+    string col_name = (it->second).column().name();
+    StringPiece sp(reinterpret_cast<const char*>(col_name.data()), col_name.size());
+    int col_id = base_data_->tablet_schema().find_column(sp);
+
+    if (col_id == 0) { // Predicate exists on the first PK column
+      return false;
+    }
+
+    if (base_data_->tablet_schema().is_key_column(col_id) &&
+        ((it->second).predicate_type() == PredicateType::Equality)) {
+        if (col_id < suffix_key_column_id_) { // Track the minimum column id
+          nonfirst_key_pred_exists = true;
+
+          // Store the "suffix_key" column id
+          suffix_key_column_id_ = col_id;
+
+          // Store the "suffix_key" equality predicate value
+          suffix_key_pred_value_ = (it->second).raw_lower();
+        }
+    }
+  }
+
+  return nonfirst_key_pred_exists;
+}
+
 Status CFileSet::Iterator::PushdownRangeScanPredicate(ScanSpec *spec) {
   CHECK_GT(row_count_, 0);
 
@@ -444,6 +497,7 @@ Status CFileSet::Iterator::PushdownRangeScanPredicate(ScanSpec *spec) {
               << " as row_idx < " << upper_bound_idx_;
     }
   }
+  skip_scan_enabled_ = CanUseSkipScan(spec);
   return Status::OK();
 }
 
@@ -452,10 +506,125 @@ void CFileSet::Iterator::Unprepare() {
   cols_prepared_.assign(col_iters_.size(), false);
 }
 
+bool CFileSet::Iterator::CheckKeyMatch(const std::vector<const void *> &raw_keys, size_t col_id) {
+  // Encode the key currently pointed to by validx_iter_
+  Arena arena2(1024);
+  gscoped_ptr<EncodedKey> cur_enc_key;
+  EncodedKey::DecodeEncodedString(
+      base_data_->tablet_schema(), &arena2,
+      Slice(key_iter_->GetCurrentValue()), &cur_enc_key);
+
+  string column_value_1 =
+      base_data_->tablet_schema().column(col_id).Stringify(raw_keys[col_id]);
+  string column_value_2 =
+      base_data_->tablet_schema().column(col_id).Stringify(cur_enc_key->raw_keys()[col_id]);
+  return column_value_1 == column_value_2;
+}
+
 Status CFileSet::Iterator::PrepareBatch(size_t *n) {
   DCHECK_EQ(prepared_count_, 0) << "Already prepared";
 
   size_t remaining = upper_bound_idx_ - cur_idx_;
+
+  // This is a three seek approach for index skip scan implementation:
+  // 1. Place the validx_iter_ at the entry containing the next
+  //    unique "prefix_key" value.
+  // 2. Place the iterator at or after the entry formed by the "prefix_key"
+  //    found in 1. and the "suffix_key" predicate value.
+  // 3. If the seek in 2. results in exact match with the "suffix_key" predicate value,
+  //    store the row id that represents the last relevant entry (upper bound) wrt the
+  //    current "prefix_key"(found in 1.)
+
+  if (skip_scan_enabled_ && (static_cast<int>(cur_idx_) > suffix_key_upper_bound_idx_)) {
+    size_t num_key_cols = base_data_->tablet_schema().num_key_columns();
+    bool suffix_key_match, continue_seeking_next_prefix = false;
+    int suffix_key_lower_bound_idx = 0;
+    Status next_entry_match, suffix_key_upper_bound_match;
+
+    do {
+      if (cur_idx_ == 0 && !continue_seeking_next_prefix) {
+        // Get the first entry of the validx_iter_
+        next_entry_match = key_iter_->SeekToFirst();
+      } else {
+        // Search for the next unique prefix key, as the entry wrt to the current
+        // "prefix_key" has already been scanned.
+        next_entry_match = SeekToNextPrefixKey(suffix_key_column_id_);
+      }
+
+      if (next_entry_match.IsNotFound()) {
+        VLOG(1) << "next prefix not found";
+        break;
+      }
+
+      // Build a new partial row with the current "prefix_key" value and the
+      // "suffix_key" predicate value
+      KuduPartialRow p_row(&(base_data_->tablet_schema()));
+      BuildNewPartialRow(&p_row);
+
+      // Fill the values for the columns succeeding the "suffix_key" column with their
+      // minimum possible values.
+      ContiguousRow cont_row(&(base_data_->tablet_schema()), p_row.row_data_);
+      for (size_t i = suffix_key_column_id_+1; i < num_key_cols; i++) {
+        const ColumnSchema &col = cont_row.schema()->column(i);
+        col.type_info()->CopyMinValue(cont_row.mutable_cell_ptr(i));
+      }
+
+      // Get the new encoded key
+      ConstContiguousRow const_row(cont_row);
+      gscoped_ptr<EncodedKey> new_enc_key(EncodedKey::FromContiguousRow(const_row));
+
+      // Seek at or after the new encoded key
+      bool exact_match;
+      next_entry_match = key_iter_->SeekAtOrAfter(*new_enc_key, &exact_match);
+
+      if (next_entry_match.IsNotFound()) {
+        VLOG(1) << "entry for the next prefix not found";
+        break;
+      }
+
+      // Check if "suffix_key" column value is the same for the new encoded key
+      // and currently seeked key.
+      suffix_key_match = CheckKeyMatch(new_enc_key->raw_keys(), suffix_key_column_id_);
+
+      // Store the row id of the first entry that matches the "suffix_key" predicate
+      // against the "prefix_key"
+      suffix_key_lower_bound_idx = key_iter_->GetCurrentOrdinal();
+
+      if (suffix_key_match) {
+        suffix_key_upper_bound_match = SeekToNextPrefixKey(suffix_key_column_id_+1);
+
+        if ( suffix_key_upper_bound_match.IsNotFound() ) {
+          break;
+        }
+        suffix_key_upper_bound_idx_ = key_iter_->GetCurrentOrdinal();
+      }
+
+    continue_seeking_next_prefix  = true;
+    } while (!suffix_key_match || (suffix_key_upper_bound_idx_ < cur_idx_));
+    // Repeat seeking for the next unique prefix if:
+    // 1. The "suffix_key" predicate value was not found for the "prefix_key" or
+    // 2. If all "suffix_key" predicate value entries for the "prefix_key" were
+    //    already scanned in the previous batch
+
+    if (next_entry_match.IsNotFound()) {
+      // No more entries exists to scan
+      cur_idx_ = upper_bound_idx_ - 1;
+      remaining = 1;
+    } else {
+      // Update cur_idx_ to a higher value
+      if (suffix_key_lower_bound_idx > cur_idx_) {
+        cur_idx_ = suffix_key_lower_bound_idx;
+      }
+      if (suffix_key_upper_bound_match.IsNotFound()) {
+        remaining = upper_bound_idx_ - cur_idx_;
+      } else {
+        remaining =
+            (suffix_key_upper_bound_idx_ > cur_idx_) ? suffix_key_upper_bound_idx_ - cur_idx_ : 1;
+      }
+    }
+  }
+
+
   if (*n > remaining) {
     *n = remaining;
   }
@@ -518,6 +687,50 @@ Status CFileSet::Iterator::MaterializeColumn(ColumnMaterializationContext *ctx) 
   RETURN_NOT_OK(iter->Scan(ctx));
 
   return Status::OK();
+}
+
+Status CFileSet::Iterator::SeekToNextPrefixKey(size_t num_cols) { // Increment id no of columns
+  gscoped_ptr<EncodedKey> enc_key;
+  Arena arena(1024);
+
+  // Convert current key slice to encoded key
+  RETURN_NOT_OK_PREPEND(EncodedKey::DecodeEncodedString(
+      base_data_->tablet_schema(), &arena,
+      Slice(key_iter_->GetCurrentValue()), &enc_key), "Invalid scan prefix key");
+
+  // Increment the "prefix_key"
+  CHECK_OK(EncodedKey::IncrementEncodedKey(
+      base_data_->tablet_schema(),
+      &enc_key, &arena, num_cols));
+
+  bool exact_match;
+  // Seek at or after the incremented "prefix_key" to get to the next unique "prefix_key" value.
+  Status s = key_iter_->SeekAtOrAfter(*enc_key, &exact_match);
+  return s;
+}
+
+void CFileSet::Iterator::BuildNewPartialRow(KuduPartialRow *p_row) {
+  gscoped_ptr<EncodedKey> enc_key;
+  Arena arena(1024);
+  EncodedKey::DecodeEncodedString(
+      base_data_->tablet_schema(), &arena,
+      Slice(key_iter_->GetCurrentValue()), &enc_key);
+
+  const std::vector<const void *> raw_keys = enc_key->raw_keys();
+  int col_id = 0;
+
+  for (auto const &value: raw_keys) {
+    if (col_id < suffix_key_column_id_) {
+      const uint8_t *data = reinterpret_cast<const uint8_t *>(value);
+      p_row->Set(col_id, data);
+    } else {
+      // Set the predicate value for the "suffix_key" column
+      const uint8_t *suffix_col_value = reinterpret_cast<const uint8_t *>(suffix_key_pred_value_);
+      p_row->Set(suffix_key_column_id_, suffix_col_value);
+      break;
+    }
+    col_id++;
+  }
 }
 
 Status CFileSet::Iterator::FinishBatch() {

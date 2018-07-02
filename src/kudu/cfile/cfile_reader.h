@@ -339,6 +339,9 @@ class CFileIterator : public ColumnIterator {
   Status SeekAtOrAfter(const EncodedKey &encoded_key,
                        bool *exact_match);
 
+  // Get the current value pointed to by validx_iter_
+  std::string GetCurrentValue();
+
   // Return true if this reader is currently seeked.
   // If the iterator is not seeked, it is an error to call any functions except
   // for seek (including GetCurrentOrdinal).
@@ -457,6 +460,12 @@ class CFileIterator : public ColumnIterator {
   // Fully initialize the underlying cfile reader if needed, and clear any
   // seek-related state.
   Status PrepareForNewSeek();
+
+  // Store the value currently pointed to by validx_iter_
+  Status SetCurrentValue();
+
+  // Value currently pointed to by validx_iter_
+  std::string cur_val_;
 
   CFileReader* reader_;
 
