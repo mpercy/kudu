@@ -334,10 +334,16 @@ class CFileIterator : public ColumnIterator {
   // Sets *exact_match to indicate whether the seek found the exact
   // key requested.
   //
+  // set_current_value indicates whether to store the current value
+  // pointed to by validx_iter_.
+  //
   // If this iterator was constructed without no value index,
   // then this will return a NotSupported status.
   Status SeekAtOrAfter(const EncodedKey &encoded_key,
-                       bool *exact_match);
+                       bool *exact_match, bool set_current_value = false);
+
+  // Get the current value pointed to by validx_iter_.
+  const std::string& GetCurrentValue();
 
   // Return true if this reader is currently seeked.
   // If the iterator is not seeked, it is an error to call any functions except
@@ -457,6 +463,12 @@ class CFileIterator : public ColumnIterator {
   // Fully initialize the underlying cfile reader if needed, and clear any
   // seek-related state.
   Status PrepareForNewSeek();
+
+  // Store the value currently pointed to by validx_iter_.
+  Status SetCurrentValue();
+
+  // Value currently pointed to by validx_iter_.
+  std::string cur_val_;
 
   CFileReader* reader_;
 

@@ -40,6 +40,10 @@
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/util/status.h"
 
+namespace kudu {
+class EncodedKey;
+}  // namespace kudu
+
 namespace boost {
 template <class T>
 class optional;
@@ -48,6 +52,7 @@ class optional;
 namespace kudu {
 
 class ColumnMaterializationContext;
+class KuduPartialRow;
 class MemTracker;
 class ScanSpec;
 class SelectionVector;
@@ -200,6 +205,56 @@ class CFileSet::Iterator : public ColumnwiseIterator {
     return cur_idx_;
   }
 
+  // This function is used to place the validx_iter_ at the next greater "prefix_key".
+  // "prefix_key" refers to the first "num_cols" columns of the current key
+  // (current key is the key currently pointed to by validx_iter_).
+  // seek_to_upper_bound_key is true when seeking for an exclusive upper bound on
+  // the scan range.
+  Status SeekToNextPrefixKey(size_t num_cols, bool seek_to_upper_bound_key);
+
+  // Builds a key containing the current "prefix_key", predicate column value
+  // and the minimum value for rest of the key columns.
+  gscoped_ptr<EncodedKey> GetKeyWithPredicateVal(KuduPartialRow *p_row, gscoped_ptr<EncodedKey> cur_enc_key);
+
+  // Check if the raw key values in the given column id range [start_col_id..end_col_id]
+  // matches with the entry currently pointed to by validx_iter_.
+  bool CheckKeyMatch(const std::vector<const void *> &raw_keys, int start_col_id, int end_col_id);
+
+  // This method implements a "skip-scan" optimization, allowing a scan to use
+  // the primary key index to efficiently seek to matching rows where there are
+  // predicates on compound key columns that do not necessarily include the
+  // leading column of the primary key. At the time of writing, only a single
+  // equality predicate is supported, although the algorithm can support ranges
+  // of values.
+  //
+  // This method should be invoked during the PrepareBatch() phase of the row
+  // iterator lifecycle.
+  //
+  // The in-out parameter 'remaining' refers to the number of rows remaining to
+  // scan. When this method is invoked, 'remaining' should contain the maximum
+  // number of remaining rows available to scan. Once this method returns,
+  // 'remaining' will contain the number of rows to scan to consume the
+  // available matching rows according to the equality predicate. Note:
+  // 'remaining' will always be at least 1, although it is a TODO to allow it
+  // to be 0 (0 violates CHECK conditions elsewhere in the scan code).
+
+  // Preconditions upon entering this method:
+  // * cur_idx_ >= skip_scan_upper_bound_idx_.
+  // * key_iter_ is not NULL.
+  //
+  // Postconditions upon exiting this method:
+  // 1. key_iter_->cur_val_ stores the first entry containing both the next unique
+  //    prefix key and the predicate value, remaining to be scanned in the current batch.
+  // 2. skip_scan_lower_bound_idx will store the row id of the entry found in 1.
+  // 3. skip_scan_upper_bound_idx is the row id which is an exclusive upper bound
+  //    on our current scan range.
+  // 4. cur_idx_ is either same as skip_scan_lower_bound_idx or remains unchanged (this occurs
+  //    when cur_idx_ lies somewhere in between the current scan range).
+  // 5. remaining stores the number the entries to be scanned in the current scan range.
+  //
+  // See the .cc file for details on the approach and the implementation.
+  void SkipToNextScan(size_t *remaining);
+
   // Collect the IO statistics for each of the underlying columns.
   virtual void GetIteratorStats(std::vector<IteratorStats> *stats) const OVERRIDE;
 
@@ -219,6 +274,14 @@ class CFileSet::Iterator : public ColumnwiseIterator {
 
   // Fill in col_iters_ for each of the requested columns.
   Status CreateColumnIterators(const ScanSpec* spec);
+
+  // Currently, skip scan will be used if there exists an equality predicate on
+  // any of the non-first primary key(PK) columns.
+  // If the equality predicate consists of multiple non-first PK columns,
+  // the column with the minimum id will be called the "predicate_column" and
+  // consequently, all it's preceding columns will be called the
+  // "prefix_key" for the skip scan approach.
+  void TryEnableSkipScan(ScanSpec& spec);
 
   // Look for a predicate which can be converted into a range scan using the key
   // column's index. If such a predicate exists, remove it from the scan spec and
@@ -257,6 +320,19 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   // materialized, it doesn't need to be read off disk.
   std::vector<bool> cols_prepared_;
 
+  // Flag for whether index skip scan is used.
+  bool use_skip_scan_ = false;
+
+  // Store equality predicate value to use skip scan.
+  const void* skip_scan_predicate_value_;
+
+  // Column id of the "predicate_column".
+  int skip_scan_predicate_column_id_;
+
+  // Row id of the next row that does not match the predicate.
+  // This is an exclusive upper bound on our scan range.
+  // A value of -1 indicates that the upper bound is not known.
+  int64_t skip_scan_upper_bound_idx_ = -1;
 };
 
 } // namespace tablet

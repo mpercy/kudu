@@ -48,6 +48,7 @@ template<typename KeyTypeWrapper> struct IntKeysTestSetup;  // IWYU pragma: keep
 } // namespace client
 
 namespace tablet {
+class CFileSet;
   template<typename KeyTypeWrapper> struct SliceTypeRowOps; // IWYU pragma: keep
   template<typename KeyTypeWrapper> struct NumTypeRowOps;   // IWYU pragma: keep
 } // namespace tablet
@@ -497,6 +498,7 @@ class KUDU_EXPORT KuduPartialRow {
   friend class RowOperationsPBDecoder;
   friend class RowOperationsPBEncoder;
   friend class TestScanSpec;
+  friend class kudu::tablet::CFileSet;
   template<typename KeyTypeWrapper> friend struct client::SliceKeysTestSetup;
   template<typename KeyTypeWrapper> friend struct client::IntKeysTestSetup;
   template<typename KeyTypeWrapper> friend struct tablet::SliceTypeRowOps;
