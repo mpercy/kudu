@@ -53,6 +53,18 @@
             <artifactId>audience-annotations</artifactId>
             <version>${yetus.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.github.scopt</groupId>
+            <artifactId>scopt_${scala.binary.version}</artifactId>
+            <version>${scopt.version}</version>
+            <exclusions>
+                <exclusion>
+                    <!-- Make sure wrong Scala version is not pulled in. -->
+                    <groupId>org.scala-lang</groupId>
+                    <artifactId>scala-library</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
 
         <dependency>
             <groupId>com.databricks</groupId>
