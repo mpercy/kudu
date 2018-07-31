@@ -786,7 +786,7 @@ Status CFileIterator::SetCurrentValue() {
   Arena arena(1024);
 
   PreparedBlock *pblk = prepared_blocks_.back();
-  ColumnBlock cb(reader_->type_info(), nullptr, &ret, 1, &arena);
+  ColumnBlock cb(reader_->type_info(), nullptr, &ret, /* nrows= */ 1, &arena);
   ColumnDataView cdv(&cb);
   size_t n = 1;
   RETURN_NOT_OK(pblk->dblk_->CopyNextValues(&n, &cdv));

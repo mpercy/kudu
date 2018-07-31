@@ -283,14 +283,15 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   bool skip_scan_enabled_ = false;
 
   // Equality predicate value on the "suffix_key"
-  const void* suffix_key_pred_value_;
+  const void* skip_scan_predicate_value_;
 
   // Column id of the "suffix_key"
-  int suffix_key_column_id_;
+  int skip_scan_predicate_column_id_;
 
-  // Row id of the last entry of "suffix_key" predicate value wrt to the
-  // "prefix_key" currently pointed to by validx_iter_
-  int suffix_key_upper_bound_idx_ = -1;
+  // Row id of the next row that does not match the predicate.
+  // This is an exclusive upper bound on our scan range.
+  // A value of -1 indicates that the upper bound is not known.
+  int64_t skip_scan_upper_bound_idx_ = -1;
 };
 
 } // namespace tablet
