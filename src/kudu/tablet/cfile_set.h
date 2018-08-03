@@ -205,20 +205,33 @@ class CFileSet::Iterator : public ColumnwiseIterator {
     return cur_idx_;
   }
 
+  // Decode the currently-seeked key into 'enc_key'.
+  Status DecodeCurrentKey(Arena* arena, gscoped_ptr<EncodedKey>* enc_key);
+
   // This function is used to place the validx_iter_ at the next greater "prefix_key".
   // "prefix_key" refers to the first "num_cols" columns of the current key
   // (current key is the key currently pointed to by validx_iter_).
-  // seek_to_upper_bound_key is true when seeking for an exclusive upper bound on
-  // the scan range.
-  Status SeekToNextPrefixKey(size_t num_cols, bool seek_to_upper_bound_key);
+  // 'cache_seeked_value' controls whether we will remember the key seeked to
+  // in the "current value" of the iterator.
+  Status SeekToNextPrefixKey(size_t num_prefix_cols, bool cache_seeked_value);
+
+  // Seek to the next predicate match within the current prefix.
+  Status SeekToNextPredicateMatchCurPrefix(size_t num_prefix_cols);
 
   // Builds a key containing the current "prefix_key", predicate column value
   // and the minimum value for rest of the key columns.
-  gscoped_ptr<EncodedKey> GetKeyWithPredicateVal(KuduPartialRow *p_row, gscoped_ptr<EncodedKey> cur_enc_key);
+  gscoped_ptr<EncodedKey> GetKeyWithPredicateVal(KuduPartialRow *p_row,
+                                                 const gscoped_ptr<EncodedKey>& cur_enc_key);
 
-  // Check if the raw key values in the given column id range [start_col_id..end_col_id]
-  // matches with the entry currently pointed to by validx_iter_.
-  bool CheckKeyMatch(const std::vector<const void *> &raw_keys, int start_col_id, int end_col_id);
+  // Returns true if the given encoded key matches the skip scan predicate.
+  bool CheckPredicateMatch(const gscoped_ptr<EncodedKey>& enc_key) const;
+
+  // Check if the column values in the range corresponding to the given
+  // inclusive column id range [start_col_id, end_col_id] are equal between the
+  // two given keys.
+  bool KeyColumnsMatch(const gscoped_ptr<EncodedKey>& key1,
+                       const gscoped_ptr<EncodedKey>& key2,
+                       int start_col_id, int end_col_id) const;
 
   // This method implements a "skip-scan" optimization, allowing a scan to use
   // the primary key index to efficiently seek to matching rows where there are
