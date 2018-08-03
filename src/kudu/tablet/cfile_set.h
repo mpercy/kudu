@@ -205,12 +205,18 @@ class CFileSet::Iterator : public ColumnwiseIterator {
     return cur_idx_;
   }
 
+  // Decode the currently-seeked key into 'enc_key'.
+  Status DecodeCurrentKey(Arena* arena, gscoped_ptr<EncodedKey>* enc_key);
+
   // This function is used to place the validx_iter_ at the next greater "prefix_key".
   // "prefix_key" refers to the first "num_cols" columns of the current key
   // (current key is the key currently pointed to by validx_iter_).
   // seek_to_upper_bound_key is true when seeking for an exclusive upper bound on
   // the scan range.
-  Status SeekToNextPrefixKey(size_t num_cols, bool seek_to_upper_bound_key);
+  Status SeekToNextPrefixKey(size_t num_prefix_cols);
+
+  // Seek to the next predicate match within the current prefix.
+  Status SeekToNextPredicateMatchCurPrefix(size_t num_prefix_cols);
 
   // Builds a key containing the current "prefix_key", predicate column value
   // and the minimum value for rest of the key columns.

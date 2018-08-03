@@ -328,7 +328,7 @@ TEST_P(IndexSkipScanTest, IndexSkipScanCorrectnessTest) {
       {
         // Test predicate on the third PK column.
         ScanSpec spec;
-        Slice value_p3("2_p3");
+        const char* value_p3 = "2_p3";
         auto pred_p3 = ColumnPredicate::Equality(schema_.column(2), &value_p3);
         spec.AddPredicate(pred_p3);
         vector<string> results;
