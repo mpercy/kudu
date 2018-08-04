@@ -808,6 +808,7 @@ const string& CFileIterator::GetCurrentValue() {
 
 Status CFileIterator::SeekAtOrAfter(const EncodedKey &encoded_key,
                                     bool *exact_match, bool set_current_value) {
+  bool local_exact_match;
   RETURN_NOT_OK(PrepareForNewSeek());
   DCHECK_EQ(reader_->is_nullable(), false);
 
@@ -833,10 +834,10 @@ Status CFileIterator::SeekAtOrAfter(const EncodedKey &encoded_key,
   Status dblk_seek_status;
   if (encoded_key.num_key_columns() > 1) {
     Slice slice = encoded_key.encoded_key();
-    dblk_seek_status = b->dblk_->SeekAtOrAfterValue(&slice, exact_match);
+    dblk_seek_status = b->dblk_->SeekAtOrAfterValue(&slice, &local_exact_match);
   } else {
     dblk_seek_status = b->dblk_->SeekAtOrAfterValue(encoded_key.raw_keys()[0],
-                                                    exact_match);
+                                                    &local_exact_match);
   }
 
   // If seeking within the data block results in NotFound, then that indicates that the
@@ -846,7 +847,7 @@ Status CFileIterator::SeekAtOrAfter(const EncodedKey &encoded_key,
   // last block in the file, then we just return NotFound(), since there is no
   // value "at or after".
   if (PREDICT_FALSE(dblk_seek_status.IsNotFound())) {
-    *exact_match = false;
+    local_exact_match = false;
     if (PREDICT_FALSE(!validx_iter_->HasNext())) {
       return Status::NotFound("key after last block in file",
                               KUDU_REDACT(encoded_key.encoded_key().ToDebugString()));
@@ -868,6 +869,7 @@ Status CFileIterator::SeekAtOrAfter(const EncodedKey &encoded_key,
     SetCurrentValue();
   }
   seeked_ = validx_iter_.get();
+  if (exact_match) *exact_match = local_exact_match;
   return Status::OK();
 }
 
