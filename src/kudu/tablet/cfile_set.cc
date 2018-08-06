@@ -401,6 +401,13 @@ Status CFileSet::Iterator::Init(ScanSpec *spec) {
 
 void CFileSet::Iterator::TryEnableSkipScan(ScanSpec& spec) {
   int num_key_cols =  base_data_->tablet_schema().num_key_columns();
+  VLOG(1) << "Schema dump";
+  for (int i = 0; i < num_key_cols; i++) {
+    auto col = base_data_->tablet_schema().column(i);
+    const auto& col_name = col.name();
+    int col_index = i;
+    VLOG(1) << "Col name: " << col_name << ", index: " << col_index;
+  }
 
   if (!FLAGS_enable_skip_scan || num_key_cols <= 1) {
     use_skip_scan_ = false;
@@ -422,21 +429,21 @@ void CFileSet::Iterator::TryEnableSkipScan(ScanSpec& spec) {
   for (auto it=predicates.begin(); it!=predicates.end(); ++it) {
     // Get the column id from the predicate
     string col_name = it->second.column().name();
-    StringPiece sp(reinterpret_cast<const char*>(col_name.data()), col_name.size());
-    int col_id = base_data_->tablet_schema().find_column(sp);
+    int col_index = base_data_->tablet_schema().find_column(col_name);
+    VLOG(1) << "Col name: " << col_name << ", index: " << col_index;
 
-    if (col_id == 0) { // Predicate exists on the first PK column.
+    if (col_index == 0) { // Predicate exists on the first PK column.
       use_skip_scan_ = false;
       return;
     }
 
-    if (base_data_->tablet_schema().is_key_column(col_id) &&
+    if (base_data_->tablet_schema().is_key_column(col_index) &&
         ((it->second).predicate_type() == PredicateType::Equality)) {
-      if (col_id < skip_scan_predicate_column_id_) { // Track the minimum column id.
+      if (col_index < skip_scan_predicate_column_id_) { // Track the minimum column id.
         nonfirst_key_pred_exists = true;
 
         // Store the predicate column id.
-        skip_scan_predicate_column_id_ = col_id;
+        skip_scan_predicate_column_id_ = col_index;
 
         // Store the predicate value.
         skip_scan_predicate_value_ = (it->second).raw_lower();
@@ -525,11 +532,7 @@ Status CFileSet::Iterator::SeekToNextPrefixKey(size_t num_prefix_cols, bool cach
   Arena arena(1024);
   RETURN_NOT_OK(DecodeCurrentKey(&arena, &enc_key));
 
-  // Increment the "prefix_key" or the first "num_prefix_cols" columns of the
-  // current key.
-  CHECK_OK(EncodedKey::IncrementEncodedKey(
-      base_data_->tablet_schema(),
-      &enc_key, &arena, num_prefix_cols));
+  VLOG(1) << "Before setting predicate val: " << enc_key->Stringify(base_data_->tablet_schema());
 
   // Set the predicate column to the predicate value in case we can find a
   // predicate match in one search. As a side effect, GetKeyWithPredicateVal()
@@ -538,6 +541,17 @@ Status CFileSet::Iterator::SeekToNextPrefixKey(size_t num_prefix_cols, bool cach
   KuduPartialRow partial_row(&(base_data_->tablet_schema()));
   gscoped_ptr<EncodedKey> key_with_pred_value =
       GetKeyWithPredicateVal(&partial_row, enc_key);
+
+  VLOG(1) << "Before incrementing first " << num_prefix_cols << " cols: " << key_with_pred_value->Stringify(base_data_->tablet_schema());
+
+  // Increment the "prefix_key" or the first "num_prefix_cols" columns of the
+  // current key.
+  CHECK_OK(EncodedKey::IncrementEncodedKey(
+      base_data_->tablet_schema(),
+      &key_with_pred_value, &arena, num_prefix_cols));
+
+  VLOG(1) << "After incrementing: " << key_with_pred_value->Stringify(base_data_->tablet_schema());
+
   return key_iter_->SeekAtOrAfter(*key_with_pred_value,
                                   /* exact_match= */ nullptr,
                                   /* set_current_value= */ cache_seeked_value);
@@ -732,12 +746,14 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
       }
       continue;
     }
-    VLOG(1) << "Found the lower bound key? " << lower_bound_key_found;
+
+    VLOG(1) << "Found lower bound key at ordinal: " << key_iter_->GetCurrentOrdinal();
 
     /////////////////////////////////////////////////////////////
     // Next, find the following row that matches the predicate.
     /////////////////////////////////////////////////////////////
 
+    VLOG(1) << "Skip scan predicate column id: " << skip_scan_predicate_column_id_;
     int num_prefix_cols_including_predicate = skip_scan_predicate_column_id_ + 1;
     // Do not cache the seeked value for the upper bound because the next time
     // we seek for the lower bound we want to be able to get a match on the
@@ -752,7 +768,7 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
 
     skip_scan_upper_bound_idx_ = key_iter_->GetCurrentOrdinal();
 
-    VLOG(1) << "Found upper bound key";
+    VLOG(1) << "Found upper bound key at ordinal: " << skip_scan_upper_bound_idx_;
 
     // Check to see whether we have effectively seeked backwards. If so, we
     // need to keep looking until our upper bound is past the last row that we
