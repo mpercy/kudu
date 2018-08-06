@@ -531,7 +531,14 @@ Status CFileSet::Iterator::SeekToNextPrefixKey(size_t num_prefix_cols, bool cach
       base_data_->tablet_schema(),
       &enc_key, &arena, num_prefix_cols));
 
-  return key_iter_->SeekAtOrAfter(*enc_key,
+  // Set the predicate column to the predicate value in case we can find a
+  // predicate match in one search. As a side effect, GetKeyWithPredicateVal()
+  // sets minimum values on the columns after the predicate value, which is
+  // required for correctness here.
+  KuduPartialRow partial_row(&(base_data_->tablet_schema()));
+  gscoped_ptr<EncodedKey> key_with_pred_value =
+      GetKeyWithPredicateVal(&partial_row, enc_key);
+  return key_iter_->SeekAtOrAfter(*key_with_pred_value,
                                   /* exact_match= */ nullptr,
                                   /* set_current_value= */ cache_seeked_value);
 }
