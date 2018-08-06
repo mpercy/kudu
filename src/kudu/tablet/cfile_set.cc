@@ -652,6 +652,11 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
        !lower_bound_key_found && loop_num < FLAGS_skip_scan_short_circuit_loops;
        loop_num++) {
     DCHECK_LT(cur_idx_, skip_scan_upper_bound_idx_);
+    VLOG(1) << Substitute("cur idx: $0", cur_idx_);
+    VLOG(1) << "Predicate col: " << skip_scan_predicate_column_id_
+            << ", predicate val: "
+            << base_data_->tablet_schema().column(skip_scan_predicate_column_id_).Stringify(
+                  skip_scan_predicate_value_);
 
     //////////////////////////////////////////////////////////
     // First, find the first row that matches the predicate.
@@ -661,6 +666,7 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
     // are entering this loop on the first call to this method.
     if (cur_idx_ == 0 && loop_num == 0) {
       // Get the first entry of the validx_iter_.
+      VLOG(1) << "loop " << loop_num << ": seeking to first";
       s = key_iter_->SeekToFirst();
 
     // Only seek to the next prefix if our previous call to
@@ -668,12 +674,16 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
     } else if (!prefix_key_rolled) {
       // Search for the next unique prefix key, as the predicate-matching
       // entries for the current prefix have already been scanned.
+      VLOG(1) << "loop " << loop_num << ": seeking to next prefix key";
       s = SeekToNextPrefixKey(skip_scan_predicate_column_id_, /* cache_seeked_value=*/ true);
+    } else {
+      VLOG(1) << "loop " << loop_num << ": not seeking!";
     }
     prefix_key_rolled = false;
 
     // We fell off the end of the cfile. No more rows will match.
     if (s.IsNotFound()) {
+      VLOG(1) << "NOT FOUND";
       lower_bound_key_found = false;
       break;
     }
@@ -683,10 +693,12 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
     gscoped_ptr<EncodedKey> next_prefix_key;
 
     CHECK_OK(DecodeCurrentKey(&arena, &next_prefix_key));
+    VLOG(1) << "Newly seeked prefix = " << next_prefix_key->Stringify(base_data_->tablet_schema());
 
     // Attempt to seek to the next predicate match.
     s = SeekToNextPredicateMatchCurPrefix(skip_scan_predicate_column_id_);
     if (s.IsNotFound()) {
+      VLOG(1) << "NOT FOUND";
       lower_bound_key_found = false;
       break;
     }
@@ -697,6 +709,8 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
 
     // Check if we successfully seeked to a predicate key match.
     CHECK_OK(DecodeCurrentKey(&arena, &lower_bound_key));
+    VLOG(1) << "Lower bound key: " << lower_bound_key->Stringify(base_data_->tablet_schema())
+            << " on loop " << loop_num;
 
     // Keep track of the lower bound on a matching key.
     skip_scan_lower_bound_idx = key_iter_->GetCurrentOrdinal();
@@ -706,6 +720,7 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
 
     // We weren't able to find a predicate match for our lower bound key, so loop and search again.
     if (!lower_bound_key_found)  {
+      VLOG(1) << "Didn't find the lower bound key";
       // If the prefix key rolled between our initial lower bound next prefix
       // seek and our seek to the predicate match with that prefix, it's
       // possible that the latest prefix will have a predicate match, so on our
@@ -717,6 +732,7 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
       }
       continue;
     }
+    VLOG(1) << "Found the lower bound key? " << lower_bound_key_found;
 
     /////////////////////////////////////////////////////////////
     // Next, find the following row that matches the predicate.
@@ -736,12 +752,18 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
 
     skip_scan_upper_bound_idx_ = key_iter_->GetCurrentOrdinal();
 
+    VLOG(1) << "Found upper bound key";
+
     // Check to see whether we have effectively seeked backwards. If so, we
     // need to keep looking until our upper bound is past the last row that we
     // previously scanned.
     if (skip_scan_upper_bound_idx_ <= cur_idx_) {
+      VLOG(1) << Substitute("cur idx: $0, lower idx: $1, upper idx: $2", cur_idx_,
+                            skip_scan_lower_bound_idx, skip_scan_upper_bound_idx_);
+
       skip_scan_upper_bound_idx_ = upper_bound_idx_; // Reset upper bound to max.
       lower_bound_key_found = false;
+      continue;
     }
   }
 
@@ -760,6 +782,8 @@ void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
     // Always read at least one row.
     *remaining = std::max<int64_t>(skip_scan_upper_bound_idx_ - cur_idx_, 1);
   }
+
+  VLOG(1) << "Matching rows: " << *remaining;
 }
 
 Status CFileSet::Iterator::PrepareBatch(size_t *nrows) {
