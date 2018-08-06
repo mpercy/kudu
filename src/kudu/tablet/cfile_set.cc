@@ -613,8 +613,9 @@ bool CFileSet::Iterator::KeyColumnsMatch(const gscoped_ptr<EncodedKey>& key1,
 
 void CFileSet::Iterator::SkipToNextScan(size_t *remaining) {
   // Keep scanning if we're still in the range that needs scanning from our
-  // previous seek.
-  if (cur_idx_ < skip_scan_upper_bound_idx_) {
+  // previous seek. static_cast required because cur_idx_ is unsigned and the
+  // upper bound index can be negative.
+  if (static_cast<int64_t>(cur_idx_) < skip_scan_upper_bound_idx_) {
     *remaining = std::max<int64_t>(skip_scan_upper_bound_idx_ - cur_idx_, 1);
     return;
   }
