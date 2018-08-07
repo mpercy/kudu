@@ -306,7 +306,8 @@ restore_env
 # Clang is used by all builds so it is part of the 'common' library group even
 # though its LLVM libraries are installed to $PREFIX_DEPS.
 if [ -n "$F_COMMON" -o -n "$F_LLVM" ]; then
-  build_llvm normal
+  #build_llvm normal
+  echo skipping llvm normal build
 fi
 
 save_env
@@ -479,7 +480,8 @@ EXTRA_CXXFLAGS="-fsanitize=thread $EXTRA_CXXFLAGS"
 EXTRA_CXXFLAGS="-DTHREAD_SANITIZER $EXTRA_CXXFLAGS"
 
 if [ -n "$F_TSAN" -o -n "$F_LLVM" ]; then
-  build_llvm tsan
+  #build_llvm tsan
+  echo skipping llvm tsan build
 fi
 
 # LLVM is told to use libc++ explicitly and thus doesn't need these, but the
