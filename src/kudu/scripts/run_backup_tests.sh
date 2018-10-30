@@ -16,7 +16,10 @@ PARTITIONS_PER_TABLET_SERVER=50 # Arbitrarily chosen
 # Calculated variables.
 NUM_PARTITIONS=$(($NUM_TABLET_SERVERS * $PARTITIONS_PER_TABLET_SERVER))
 
-# Future variables, but fixed for onw.
+# Called Python program should not buffer output.
+export PYTHONUNBUFFERED=y
+
+# Future variables, but fixed for now.
 TABLE_DATA_SIZE_MB=$((500 * 1024)) # TODO(mpercy): Also: (5 * 1024 * 1024) and (50 * 1024 * 1024).
 NUM_EXECUTORS=$(($NUM_TABLET_SERVERS * $NUM_PARTITIONS)) # TODO(mpercy): Also test $NUM_TABLET_SERVERS * $VCPUS_PER_TABLET_SERVER
 NUM_TASKS=$(($NUM_EXECUTORS * 10)) # TODO(mpercy): Test varying this.
