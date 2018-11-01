@@ -91,7 +91,7 @@ object DistributedDataGenerator {
     val sc = ss.sparkContext
     val rowsPerTask = opts.numRows / opts.numTasks
     val metrics = GeneratorMetrics.create(sc)
-    sc.parallelize(0 until opts.numTasks)
+    sc.parallelize(0 until opts.numTasks, opts.numTasks)
       .foreach(
         taskNum =>
           generateRows(
