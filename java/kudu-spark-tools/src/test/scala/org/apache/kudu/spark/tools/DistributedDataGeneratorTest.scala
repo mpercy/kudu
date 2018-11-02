@@ -40,7 +40,7 @@ class DistributedDataGeneratorTest extends KuduTestSuite {
         "--num-tasks=10",
         "--string-field-len=128",
         TABLE_NAME,
-        miniCluster.getMasterAddressesAsString
+        harness.getMasterAddressesAsString
       ),
       ss
     )

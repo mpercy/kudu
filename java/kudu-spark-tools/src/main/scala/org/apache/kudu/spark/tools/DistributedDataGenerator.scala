@@ -1,6 +1,7 @@
 package org.apache.kudu.spark.tools
 
-import org.apache.kudu.client.KuduClient.KuduClientBuilder
+import org.apache.hadoop.util.ShutdownHookManager
+import org.apache.kudu.client.AsyncKuduClient
 import org.apache.kudu.client.SessionConfiguration
 import org.apache.kudu.mapreduce.tools.ColumnDataGenerator
 import org.apache.kudu.mapreduce.tools.RandomDataGenerator
@@ -14,6 +15,8 @@ import org.apache.yetus.audience.InterfaceStability
 
 import scala.collection.mutable.ArrayBuffer
 import scopt.OptionParser
+
+import scala.collection.mutable
 
 case class TableOptions(
     numPartitions: Int,
@@ -41,7 +44,7 @@ object DistributedDataGenerator {
       rowsToWrite: Long,
       stringFieldLen: Int,
       metrics: GeneratorMetrics) {
-    val kuduClient = new KuduClientBuilder(masterAddresses).build()
+    val kuduClient = KuduClientCache.getAsyncClient(masterAddresses, None).syncClient
     val session = kuduClient.newSession()
     session.setFlushMode(SessionConfiguration.FlushMode.AUTO_FLUSH_BACKGROUND)
     val kuduTable = kuduClient.openTable(tableName)
@@ -179,5 +182,47 @@ object DistributedDataGeneratorOptions {
 
   def parse(args: Seq[String]): Option[DistributedDataGeneratorOptions] = {
     parser.parse(args, DistributedDataGeneratorOptions("", ""))
+  }
+}
+
+// Copy-pasted from the kudu-spark module; this is needed to avoid spawning too many reactor threads
+// when multiple tasks are executed by the same executor.
+private object KuduClientCache {
+  private case class CacheKey(kuduMaster: String, socketReadTimeoutMs: Option[Long])
+
+  /**
+   * Set to
+   * [[org.apache.spark.util.ShutdownHookManager.DEFAULT_SHUTDOWN_PRIORITY]].
+   * The client instances are closed through the JVM shutdown hook
+   * mechanism in order to make sure that any unflushed writes are cleaned up
+   * properly. Spark has no shutdown notifications.
+   */
+  private val ShutdownHookPriority = 100
+
+  private val clientCache = new mutable.HashMap[CacheKey, AsyncKuduClient]()
+
+  // Visible for testing.
+  private[kudu] def clearCacheForTests() = clientCache.clear()
+
+  def getAsyncClient(kuduMaster: String, socketReadTimeoutMs: Option[Long]): AsyncKuduClient = {
+    val cacheKey = CacheKey(kuduMaster, socketReadTimeoutMs)
+    clientCache.synchronized {
+      if (!clientCache.contains(cacheKey)) {
+        val builder = new AsyncKuduClient.AsyncKuduClientBuilder(kuduMaster)
+        socketReadTimeoutMs match {
+          case Some(timeout) => builder.defaultSocketReadTimeoutMs(timeout)
+          case None =>
+        }
+
+        val asyncClient = builder.build()
+        ShutdownHookManager
+          .get()
+          .addShutdownHook(new Runnable {
+            override def run(): Unit = asyncClient.close()
+          }, ShutdownHookPriority)
+        clientCache.put(cacheKey, asyncClient)
+      }
+      return clientCache(cacheKey)
+    }
   }
 }
