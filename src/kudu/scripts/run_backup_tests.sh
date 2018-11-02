@@ -30,7 +30,6 @@ TABLE_NAME=mpercy_test20
 BACKUP_BASE=hdfs:///user/mpercy/kudu-backup-tests
 
 OPTS="--spark-submit-command spark2-submit --kudu-spark-tools-jar kudu-spark2-tools_2.11-1.8.0-SNAPSHOT.jar --kudu-backup-jar kudu-backup2_2.11-1.8.0-SNAPSHOT.jar -m vc1320.halxg.cloudera.com"
-#OPTS="$OPTS --num-executors $NUM_EXECUTORS --num-tasks $NUM_TASKS --partitions $NUM_PARTITIONS --table-data-size-mb=$TABLE_DATA_SIZE_MB"
 OPTS="$OPTS --num-tasks $NUM_TASKS --partitions $NUM_PARTITIONS --table-data-size-mb=$TABLE_DATA_SIZE_MB"
 
 for NUM_COLUMNS in 10 75 300; do

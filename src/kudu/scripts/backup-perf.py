@@ -126,15 +126,15 @@ def load_table(opts, stats):
   print("--------------------------------------")
   print(timestamp())
   # Example invocation:
-  # spark2-submit --num-executors 10 --class org.apache.kudu.spark.tools.DistributedDataGenerator kudu-spark2-tools_2.11-1.8.0-SNAPSHOT.jar --type random --num-rows 10000000 --num-tasks 20 impala::default.mpercy_test3 m123.example.com
+  # spark2-submit --class org.apache.kudu.spark.tools.DistributedDataGenerator kudu-spark2-tools_2.11-1.8.0-SNAPSHOT.jar --type random --num-rows 10000000 --num-tasks 20 impala::default.mpercy_test3 m123.example.com
   CLASS_NAME = 'org.apache.kudu.spark.tools.DistributedDataGenerator'
   row_size_bytes = opts.num_string_columns * opts.string_field_len + (opts.columns - opts.num_string_columns) * 8
   num_rows = opts.table_data_size_mb * 1024 * 1024 / row_size_bytes
   print("INFO: Inserting %d rows of %d bytes each" % (num_rows, row_size_bytes))
   stats['row_size_bytes'] = row_size_bytes
   stats['num_rows'] = num_rows
-  cmd = "%s --num-executors %d --class %s %s --type %s --num-rows %d --num-tasks %d %s %s" % \
-    (opts.spark_submit_command, opts.num_executors, CLASS_NAME, opts.kudu_spark_tools_jar,
+  cmd = "%s --class %s %s --type %s --num-rows %d --num-tasks %d %s %s" % \
+    (opts.spark_submit_command, CLASS_NAME, opts.kudu_spark_tools_jar,
      opts.load_policy, num_rows, opts.num_tasks, opts.table_prefix + opts.table_name, opts.master_addresses)
   run_command(opts, cmd)
 
@@ -144,8 +144,8 @@ def backup_table(opts, stats):
   print("--------------------------------------")
   print(timestamp())
   CLASS_NAME = "org.apache.kudu.backup.KuduBackup"
-  cmd = "%s --num-executors %d --class %s %s --kuduMasterAddresses %s --path %s %s" % \
-    (opts.spark_submit_command, opts.num_executors, CLASS_NAME, opts.kudu_backup_jar,
+  cmd = "%s --class %s %s --kuduMasterAddresses %s --path %s %s" % \
+    (opts.spark_submit_command, CLASS_NAME, opts.kudu_backup_jar,
      opts.master_addresses, opts.backup_path, opts.table_prefix + opts.table_name)
   run_command(opts, cmd)
 
@@ -155,8 +155,8 @@ def restore_table(opts, stats):
   print("--------------------------------------")
   print(timestamp())
   CLASS_NAME = "org.apache.kudu.backup.KuduRestore"
-  cmd = "%s --num-executors %d --class %s %s --tableSuffix %s --kuduMasterAddresses %s --path %s %s" % \
-    (opts.spark_submit_command, opts.num_executors, CLASS_NAME, opts.kudu_backup_jar,
+  cmd = "%s --class %s %s --tableSuffix %s --kuduMasterAddresses %s --path %s %s" % \
+    (opts.spark_submit_command, CLASS_NAME, opts.kudu_backup_jar,
      opts.table_restore_suffix, opts.master_addresses, opts.backup_path, opts.table_prefix + opts.table_name)
   run_command(opts, cmd)
 
@@ -169,7 +169,6 @@ def parse_args():
   parser.add_argument('-m', '--master-addresses', required=True, help='The Kudu master addresses')
   parser.add_argument('-p', '--backup-path', required=True, help='The Hadoop-compatible path at which to store the backup')
   parser.add_argument('table_name', help='The name of the Kudu table to create')
-  parser.add_argument('-x', '--num-executors', type=int, default=10, help='Number of YARN executors')
   parser.add_argument('-t', '--num-tasks', type=int, default=20, help='Number of Spark tasks to create')
   parser.add_argument('--columns', type=int, default=10, help='The number of columns in the Kudu table')
   parser.add_argument('--num-string-columns', type=int, default=9,
@@ -220,7 +219,6 @@ def main():
   stats['partitions'] = opts.partitions
   stats['table_data_size_mb'] = opts.table_data_size_mb
   stats['replication_factor'] = opts.replication_factor
-  stats['num_executors'] = opts.num_executors
   stats['num_tasks'] = opts.num_tasks
   stats['load_policy'] = opts.load_policy
   stats['string_field_len'] = opts.load_policy
