@@ -144,9 +144,10 @@ def backup_table(opts, stats):
   print("--------------------------------------")
   print(timestamp())
   CLASS_NAME = "org.apache.kudu.backup.KuduBackup"
-  cmd = "%s --class %s %s --kuduMasterAddresses %s --path %s %s" % \
+  cmd = "%s --class %s %s --kuduMasterAddresses %s --scanRequestTimeout %d --path %s %s" % \
     (opts.spark_submit_command, CLASS_NAME, opts.kudu_backup_jar,
-     opts.master_addresses, opts.backup_path, opts.table_prefix + opts.table_name)
+     opts.master_addresses, opts.scan_request_timeout_sec,
+     opts.backup_path, opts.table_prefix + opts.table_name)
   run_command(opts, cmd)
 
 def restore_table(opts, stats):
@@ -175,6 +176,8 @@ def parse_args():
                       help='The number of string columns in the table; the rest will be bigints')
   parser.add_argument('--partitions', type=int, default=10,
                       help='The number of hash partitions of the table. This script only supports hash partitions')
+  parser.add_argument('--scan-request-timeout-sec', type=int, default=30,
+                      help='The default scan timeout for backup, in MB')
   parser.add_argument('--table-data-size-mb', type=int, default=1024,
                       help='The uncompressed data size of the table, in MB')
   parser.add_argument('--replication-factor', type=int, default=1, help='The replication factor of the table')
