@@ -354,6 +354,10 @@ Status Schema::VerifyProjectionCompatibility(const Schema& projection) const {
 
   vector<string> missing_columns;
   for (const ColumnSchema& pcol : projection.columns()) {
+    if (pcol.type_info()->is_virtual()) {
+      // Virtual columns should only ever be in a projection schema.
+      continue;
+    }
     int index = find_column(pcol.name());
     if (index < 0) {
       missing_columns.push_back(pcol.name());
@@ -389,7 +393,14 @@ Status Schema::GetMappedReadProjection(const Schema& projection,
   mapped_cols.reserve(projection.num_columns());
   mapped_ids.reserve(projection.num_columns());
 
+  int32_t proj_max_col_id = max_col_id_;
   for (const ColumnSchema& col : projection.columns()) {
+    // Generate a "fake" column id for virtual column schemas.
+    if (col.type_info()->is_virtual()) {
+      mapped_cols.push_back(col);
+      mapped_ids.push_back(ColumnId(++proj_max_col_id));
+      continue;
+    }
     int index = find_column(col.name());
     DCHECK_GE(index, 0) << col.name();
     mapped_cols.push_back(cols_[index]);
