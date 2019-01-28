@@ -167,7 +167,8 @@ TEST(TestMergeIterator, TestMergeEmpty) {
         unique_ptr<ColumnwiseIterator>(new VectorIterator({}))));
   vector<unique_ptr<RowwiseIterator>> input;
   input.emplace_back(std::move(iter));
-  unique_ptr<RowwiseIterator> merger(NewMergeIterator(std::move(input)));
+  unique_ptr<RowwiseIterator> merger(NewMergeIterator(MergeIteratorOptions(),
+                                     std::move(input)));
   ASSERT_OK(merger->Init(nullptr));
   ASSERT_FALSE(merger->HasNext());
 }
@@ -182,7 +183,8 @@ TEST(TestMergeIterator, TestMergeEmptyViaSelectionVector) {
   unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(vec)));
   vector<unique_ptr<RowwiseIterator>> input;
   input.emplace_back(std::move(iter));
-  unique_ptr<RowwiseIterator> merger(NewMergeIterator(std::move(input)));
+  unique_ptr<RowwiseIterator> merger(NewMergeIterator(MergeIteratorOptions(),
+                                     std::move(input)));
   ASSERT_OK(merger->Init(nullptr));
   ASSERT_FALSE(merger->HasNext());
 }
@@ -273,7 +275,8 @@ void TestMerge(const TestIntRangePredicate &predicate, bool overlapping_inputs =
     LOG(INFO) << "Predicate: " << predicate.pred_.ToString();
 
     LOG_TIMING(INFO, "iterating merged lists") {
-      unique_ptr<RowwiseIterator> merger(NewMergeIterator({ std::move(to_merge) }));
+      unique_ptr<RowwiseIterator> merger(NewMergeIterator(MergeIteratorOptions(),
+                                                          { std::move(to_merge) }));
       ASSERT_OK(merger->Init(&spec));
 
       RowBlock dst(kIntSchema, 100, nullptr);

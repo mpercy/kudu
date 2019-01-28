@@ -2464,9 +2464,12 @@ Status Tablet::Iterator::Init(ScanSpec *spec) {
   TRACE_COUNTER_INCREMENT("rowset_iterators", iters.size());
 
   switch (opts_.order) {
-    case ORDERED:
-      iter_ = NewMergeIterator(std::move(iters));
+    case ORDERED: {
+      MergeIteratorOptions merge_iter_opts;
+      merge_iter_opts.include_deleted_rows = opts_.include_deleted_rows;
+      iter_ = NewMergeIterator(std::move(merge_iter_opts), std::move(iters));
       break;
+    }
     case UNORDERED:
     default:
       iter_ = NewUnionIterator(std::move(iters));

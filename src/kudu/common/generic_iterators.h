@@ -29,10 +29,19 @@ class ColumnwiseIterator;
 class RowwiseIterator;
 class ScanSpec;
 
+// Options struct for the MergeIterator.
+struct MergeIteratorOptions {
+  // Whether to include and de-duplicate ghost (deleted) rows. If true, the
+  // sub-iterator schema must also contain an IS_DELETED column or an error
+  // will be returned during MergeIterator initialization.
+  bool include_deleted_rows = false;
+};
+
 // Constructs a MergeIterator of the given iterators.
 //
 // The iterators must have matching schemas and should not yet be initialized.
 std::unique_ptr<RowwiseIterator> NewMergeIterator(
+    MergeIteratorOptions opts,
     std::vector<std::unique_ptr<RowwiseIterator>> iters);
 
 // Constructs a UnionIterator of the given iterators.

@@ -235,7 +235,7 @@ class MergeIterator : public RowwiseIterator {
   //
   // Note: the iterators must be constructed using a projection that includes
   // all key columns; otherwise a CHECK will fire at initialization time.
-  explicit MergeIterator(vector<unique_ptr<RowwiseIterator>> iters);
+  MergeIterator(MergeIteratorOptions opts, vector<unique_ptr<RowwiseIterator>> iters);
 
   virtual ~MergeIterator();
 
@@ -259,10 +259,15 @@ class MergeIterator : public RowwiseIterator {
   Status MaterializeBlock(RowBlock* dst);
   Status InitSubIterators(ScanSpec *spec);
 
+  const MergeIteratorOptions opts_;
+
   // Initialized during Init.
   unique_ptr<Schema> schema_;
 
   bool initted_;
+
+  // Column index in the schema of the IS_DELETED column, if any.
+  int is_deleted_col_index_;
 
   // Holds the subiterators until Init is called, at which point this is cleared.
   // This is required because we can't create a MergeIterState of an uninitialized iterator.
@@ -290,8 +295,10 @@ class MergeIterator : public RowwiseIterator {
   int64_t num_comparisons_;
 };
 
-MergeIterator::MergeIterator(vector<unique_ptr<RowwiseIterator>> iters)
-    : initted_(false),
+MergeIterator::MergeIterator(MergeIteratorOptions opts,
+                             vector<unique_ptr<RowwiseIterator>> iters)
+    : opts_(std::move(opts)),
+      initted_(false),
       orig_iters_(std::move(iters)),
       num_orig_iters_(orig_iters_.size()),
       num_comparisons_(0) {
@@ -334,6 +341,11 @@ Status MergeIterator::Init(ScanSpec *spec) {
     }
   }
 #endif
+
+  is_deleted_col_index_ = schema_->find_first_is_deleted_virtual_column();
+  if (opts_.include_deleted_rows && is_deleted_col_index_ == Schema::kColumnNotFound) {
+    return Status::InvalidArgument("Merge iterator cannot dedup rows without IS_DELETED column");
+  }
 
   // Before we copy any rows, clean up any iterators which were empty
   // to start with. Otherwise, HasNext() won't properly return false
@@ -399,45 +411,104 @@ void MergeIterator::PrepareBatch(RowBlock* dst) {
 // and such around the comparisons. A simple experiment indicated there's some
 // 2x to be gained.
 Status MergeIterator::MaterializeBlock(RowBlock *dst) {
+  // We need a vector to track the iterators whose next_row() contains the
+  // smallest row key at a given moment during the merge because there may be
+  // several deleted ghost rows with the same key across multiple rowsets, and
+  // up to one live instantiation, what we have to de-duplicate.
+  vector<MergeIterState*> smallest(states_.size());
+
   // Initialize the selection vector.
   // MergeIterState only returns selected rows.
   dst->selection_vector()->SetAllTrue();
-  for (size_t dst_row_idx = 0; dst_row_idx < dst->nrows(); dst_row_idx++) {
-    RowBlockRow dst_row = dst->row(dst_row_idx);
+  size_t dst_row_idx = 0;
+  while (dst_row_idx < dst->nrows()) {
 
-    // Find the sub-iterator which is currently smallest
-    MergeIterState *smallest = nullptr;
-    ssize_t smallest_idx = -1;
+    // Find the sub-iterator that is currently smallest.
+    smallest.clear();
 
     // Typically the number of states_ is not that large, so using a priority
-    // queue is not worth it
-    for (size_t i = 0; i < states_.size(); i++) {
-      unique_ptr<MergeIterState> &state = states_[i];
-
-      if (PREDICT_FALSE(smallest == nullptr)) {
-        smallest = state.get();
-        smallest_idx = i;
-      } else {
+    // queue is not worth it.
+    for (const auto& iter : states_) {
+      int cmp;
+      if (!smallest.empty()) {
+        cmp = schema_->Compare(iter->next_row(), smallest[0]->next_row());
         num_comparisons_++;
-        if (schema_->Compare(state->next_row(), smallest->next_row()) < 0) {
-          smallest = state.get();
-          smallest_idx = i;
-        }
+      }
+      if (smallest.empty() || cmp < 0) {
+        smallest = { iter.get() };
+      } else if (!smallest.empty() && cmp == 0) {
+        smallest.push_back(iter.get());
       }
     }
 
     // If no iterators had any row left, then we're done iterating.
-    if (PREDICT_FALSE(smallest == nullptr)) break;
+    if (PREDICT_FALSE(smallest.empty())) break;
 
-    // Otherwise, copy the row from the smallest one, and advance it
-    RETURN_NOT_OK(CopyRow(smallest->next_row(), &dst_row, dst->arena()));
-    RETURN_NOT_OK(smallest->Advance());
+    if (opts_.include_deleted_rows) {
+      // Deduplicate any ghost rows. Row incarnation de-duplication criteria:
+      // 1. If there is a non-deleted incarnation, return that incarnation.
+      // 2. If all rows are deleted, any incarnation will suffice because we
+      //    don't guarantee we will return the latest values for deleted rows.
+      MergeIterState* iter_dedup_row = nullptr;
+      for (const auto& s : smallest) {
+        bool is_deleted =
+            *schema_->ExtractColumnFromRow<IS_DELETED>(s->next_row(), is_deleted_col_index_);
+        if (!is_deleted) {
+          iter_dedup_row = s;
+          break;
+        }
+      }
 
-    if (smallest->IsFullyExhausted()) {
-      std::lock_guard<rw_spinlock> l(states_lock_);
-      smallest->AddStats(&finished_iter_stats_by_col_);
-      states_.erase(states_.begin() + smallest_idx);
+      // If all incarnations of a given row key are deleted, then return an
+      // arbitrary incarnation.
+      if (iter_dedup_row == nullptr) {
+        iter_dedup_row = smallest[0];
+        DCHECK_EQ(true, *schema_->ExtractColumnFromRow<IS_DELETED>(iter_dedup_row->next_row(),
+                                                                   is_deleted_col_index_));
+      }
+
+      RowBlockRow dst_row = dst->row(dst_row_idx++);
+      RETURN_NOT_OK(CopyRow(iter_dedup_row->next_row(), &dst_row, dst->arena()));
+    } else {
+      // There is no IS_DELETED column present, so return all incarnations.
+      // It's possible in this case that we have >1 result for a single row. If
+      // we don't have enough capacity in the destination to accommodate all
+      // values of 'smallest' then don't return any of them.
+      if (smallest.size() > dst->nrows() - dst_row_idx) break;
+      for (auto& s : smallest) {
+        RowBlockRow dst_row = dst->row(dst_row_idx++);
+        RETURN_NOT_OK(CopyRow(s->next_row(), &dst_row, dst->arena()));
+      }
+
     }
+
+    // Advance all matching sub-iterators.
+    for (auto& s : smallest) {
+      RETURN_NOT_OK(s->Advance());
+    }
+
+    // Remove exhausted sub-iterators from the list we merge from.
+    for (MergeIterState* s : smallest) {
+      if (s->IsFullyExhausted()) {
+        std::lock_guard<rw_spinlock> l(states_lock_);
+        s->AddStats(&finished_iter_stats_by_col_);
+        // TODO(mpercy): Make removal O(1) per element to remove by using a
+        // different data structure for states_. The below erase-remove idiom
+        // gives us O(n) removal on a vector for an arbitrary number of
+        // elements to remove.
+        states_.erase(std::remove_if(states_.begin(), states_.end(),
+                                     [s](const unique_ptr<MergeIterState>& state) {
+                                       return s == state.get();
+                                     }));
+      }
+    }
+  }
+
+  // Maintain a record of the number of rows actually copied to the destination
+  // RowBlock.
+  DCHECK_LE(dst_row_idx, dst->nrows());
+  if (dst->nrows() > dst_row_idx) {
+    dst->Resize(dst_row_idx);
   }
 
   return Status::OK();
@@ -463,8 +534,8 @@ void MergeIterator::GetIteratorStats(vector<IteratorStats>* stats) const {
 }
 
 unique_ptr<RowwiseIterator> NewMergeIterator(
-    vector<unique_ptr<RowwiseIterator>> iters) {
-  return unique_ptr<RowwiseIterator>(new MergeIterator(std::move(iters)));
+    MergeIteratorOptions opts, vector<unique_ptr<RowwiseIterator>> iters) {
+  return unique_ptr<RowwiseIterator>(new MergeIterator(std::move(opts), std::move(iters)));
 }
 
 int64_t GetMergeIteratorNumComparisonsForTests(
