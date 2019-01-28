@@ -25,6 +25,7 @@
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <gflags/gflags.h>
@@ -42,6 +43,7 @@
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/types.h"
+#include "kudu/gutil/map-util.h"
 #include "kudu/gutil/mathlimits.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/memory/arena.h"
@@ -58,6 +60,7 @@ DECLARE_bool(materializing_iterator_do_pushdown);
 
 using std::string;
 using std::unique_ptr;
+using std::unordered_set;
 using std::vector;
 using strings::Substitute;
 
@@ -167,7 +170,8 @@ TEST(TestMergeIterator, TestMergeEmpty) {
         unique_ptr<ColumnwiseIterator>(new VectorIterator({}))));
   vector<unique_ptr<RowwiseIterator>> input;
   input.emplace_back(std::move(iter));
-  unique_ptr<RowwiseIterator> merger(NewMergeIterator(std::move(input)));
+  unique_ptr<RowwiseIterator> merger(
+      NewMergeIterator(MergeIteratorOptions(/*include_deleted_rows=*/false), std::move(input)));
   ASSERT_OK(merger->Init(nullptr));
   ASSERT_FALSE(merger->HasNext());
 }
@@ -182,7 +186,8 @@ TEST(TestMergeIterator, TestMergeEmptyViaSelectionVector) {
   unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(vec)));
   vector<unique_ptr<RowwiseIterator>> input;
   input.emplace_back(std::move(iter));
-  unique_ptr<RowwiseIterator> merger(NewMergeIterator(std::move(input)));
+  unique_ptr<RowwiseIterator> merger(
+      NewMergeIterator(MergeIteratorOptions(/*include_deleted_rows=*/false), std::move(input)));
   ASSERT_OK(merger->Init(nullptr));
   ASSERT_FALSE(merger->HasNext());
 }
@@ -205,6 +210,7 @@ void TestMerge(const TestIntRangePredicate &predicate, bool overlapping_inputs =
   };
   vector<List> all_ints;
   vector<uint32_t> expected;
+  unordered_set<uint32_t> seen;
   expected.reserve(FLAGS_num_rows * FLAGS_num_lists);
   Random prng(SeedRandom());
 
@@ -218,7 +224,14 @@ void TestMerge(const TestIntRangePredicate &predicate, bool overlapping_inputs =
       entry = 0;
     }
     for (int j = 0; j < FLAGS_num_rows; j++) {
-      entry += prng.Uniform(5);
+      uint32_t potential;
+      // The merge iterator does not support duplicate non-deleted keys.
+      do {
+        potential = entry + prng.Uniform(FLAGS_num_rows * FLAGS_num_lists * 10);
+      } while (ContainsKey(seen, potential));
+      InsertOrDie(&seen, potential);
+      entry = potential;
+
       ints.emplace_back(entry);
 
       // Some entries are randomly deselected in order to exercise the selection
@@ -273,7 +286,9 @@ void TestMerge(const TestIntRangePredicate &predicate, bool overlapping_inputs =
     LOG(INFO) << "Predicate: " << predicate.pred_.ToString();
 
     LOG_TIMING(INFO, "iterating merged lists") {
-      unique_ptr<RowwiseIterator> merger(NewMergeIterator({ std::move(to_merge) }));
+      unique_ptr<RowwiseIterator> merger(
+          NewMergeIterator(MergeIteratorOptions(/*include_deleted_rows=*/false),
+                           std::move(to_merge)));
       ASSERT_OK(merger->Init(&spec));
 
       RowBlock dst(kIntSchema, 100, nullptr);
@@ -304,17 +319,17 @@ void TestMerge(const TestIntRangePredicate &predicate, bool overlapping_inputs =
 
 TEST(TestMergeIterator, TestMerge) {
   TestIntRangePredicate predicate(0, MathLimits<uint32_t>::kMax);
-  TestMerge(predicate);
+  NO_FATALS(TestMerge(predicate));
 }
 
 TEST(TestMergeIterator, TestMergeNonOverlapping) {
   TestIntRangePredicate predicate(0, MathLimits<uint32_t>::kMax);
-  TestMerge(predicate, /*overlapping_inputs=*/false);
+  NO_FATALS(TestMerge(predicate, /*overlapping_inputs=*/false));
 }
 
 TEST(TestMergeIterator, TestMergePredicate) {
   TestIntRangePredicate predicate(0, FLAGS_num_rows / 5);
-  TestMerge(predicate);
+  NO_FATALS(TestMerge(predicate));
 }
 
 // Regression test for a bug in the merge which would incorrectly
@@ -323,7 +338,7 @@ TEST(TestMergeIterator, TestMergePredicate) {
 // second half.
 TEST(TestMergeIterator, TestMergePredicate2) {
   TestIntRangePredicate predicate(FLAGS_num_rows / 2, MathLimits<uint32_t>::kMax);
-  TestMerge(predicate);
+  NO_FATALS(TestMerge(predicate));
 }
 
 // Test that the MaterializingIterator properly evaluates predicates when they apply
