@@ -20,10 +20,15 @@
 # This script fixes broken deps in a macOS native binary build.
 ################################################################################
 
-from relocate_binaries_for_mini_cluster.py import PAT_MACOS_LIB_EXCLUDE
-from relocate_binaries_for_mini_cluster.py import get_dep_library_paths_macos
-from relocate_binaries_for_mini_cluster.py import relocate_dep_path_macos
-from relocate_binaries_for_mini_cluster.py import fix_rpath_macos
+from relocate_binaries_for_mini_cluster import PAT_MACOS_LIB_EXCLUDE
+from relocate_binaries_for_mini_cluster import get_raw_dep_library_paths_macos
+from relocate_binaries_for_mini_cluster import relocate_dep_path_macos
+from relocate_binaries_for_mini_cluster import fix_rpath_macos
+
+import logging
+import os
+import os.path
+import sys
 
 SOURCE_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 # Add the build-support dir to the system path so we can import kudu-util.
@@ -36,14 +41,20 @@ def main():
     print("Usage: %s target [target ...]" % (sys.argv[0], ))
     sys.exit(1)
 
+  init_logging()
+
   # Command-line arguments.
   targets = sys.argv[1:]
   for target in targets:
-    deps = get_dep_library_paths_macos(target)
-    for (dep_search_name, dep_src) in target_deps.iteritems():
+    logging.info("Repairing %s", target)
+    deps = get_raw_dep_library_paths_macos(target)
+    for dep_search_name in deps:
       if PAT_MACOS_LIB_EXCLUDE.search(dep_search_name): continue
+      if (os.path.dirname(dep_search_name) == '@rpath'): continue
+      logging.info("Relocating search path for %s in %s", dep_search_name, target)
       relocate_dep_path_macos(target, dep_search_name)
-      fix_rpath_macos(target)
+    logging.info("Fixing rpath in %s", target)
+    fix_rpath_macos(target)
 
 if __name__ == "__main__":
   main()

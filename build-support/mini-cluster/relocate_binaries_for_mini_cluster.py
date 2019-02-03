@@ -25,6 +25,7 @@
 # patched.
 ################################################################################
 
+import errno
 import logging
 import optparse
 import os
@@ -78,28 +79,30 @@ def check_for_command(command):
   Ensure that the specified command is available on the PATH.
   """
   try:
-    subprocess.check_call(['which', command])
+    _ = subprocess.check_output(['which', command])
   except subprocess.CalledProcessError as err:
     logging.error("Unable to find %s command", command)
     raise err
 
-def objdump_private_headers(binary_path):
+def dump_load_commands_macos(binary_path):
   """
-  Run `objdump -p` on the given binary.
-  Returns a list with one line of objdump output per record.
+  Run `otool -l` on the given binary.
+  Returns a list with one line of otool output per entry.
+  We use 'otool -l' instead of 'objdump -p' because 'otool' supports Universal
+  Mach-O binaries.
   """
 
-  check_for_command('objdump')
+  check_for_command('otool')
   try:
-    output = check_output(["objdump", "-p", binary_path])
+    output = check_output(["otool", "-l", binary_path])
   except subprocess.CalledProcessError as err:
     logging.error(err)
-    return []
+    raise err
   return output.strip().decode("utf-8").split("\n")
 
-def parse_objdump_macos(cmd_type, dump):
+def parse_load_commands_macos(cmd_type, dump):
   """
-  Parses the output from objdump_private_headers() for macOS.
+  Parses the output from dump_load_commands_macos() for macOS.
   'cmd_type' must be one of the following:
   * LC_RPATH: Returns a list containing the rpath search path, with one
     search path per entry.
@@ -107,7 +110,7 @@ def parse_objdump_macos(cmd_type, dump):
     one shared object per entry. They are returned as stored in the MachO
     header, without being first resolved to an absolute path, and may look
     like: @rpath/Foo.framework/Versions/A/Foo
-  'dump' is the output from objdump_private_headers().
+  'dump' is the output from dump_load_commands_macos().
   """
   # Parsing state enum values.
   PARSING_NONE = 0
@@ -146,12 +149,12 @@ def get_rpaths_macos(binary_path):
   """
   Helper function that returns a list of rpaths parsed from the given binary.
   """
-  dump = objdump_private_headers(binary_path)
-  return parse_objdump_macos(LC_RPATH, dump)
+  dump = dump_load_commands_macos(binary_path)
+  return parse_load_commands_macos(LC_RPATH, dump)
 
 def resolve_library_paths_macos(raw_library_paths, rpaths):
   """
-  Resolve the library paths from parse_objdump_macos(LC_LOAD_DYLIB, ...) to
+  Resolve the library paths from parse_load_commands_macos(LC_LOAD_DYLIB, ...) to
   absolute filesystem paths using the rpath information returned from
   get_rpaths_macos().
   Returns a mapping from original to resolved library paths on success.
@@ -171,17 +174,24 @@ def resolve_library_paths_macos(raw_library_paths, rpaths):
         resolved = True
         break
     if not resolved:
-      raise FileNotFoundError("Unable to locate library %s in rpath %s" % (raw_lib_path, rpaths))
+      raise IOError(errno.ENOENT, "Unable to locate library %s in rpath %s" % (raw_lib_path, rpaths))
   return resolved_paths
 
-def get_dep_library_paths_macos(binary_path):
+def get_raw_dep_library_paths_macos(binary_path):
+  """
+  Returns a list of symbolic library dependencies for the given binary.
+  """
+  dump = dump_load_commands_macos(binary_path)
+  raw_library_paths = parse_load_commands_macos(LC_LOAD_DYLIB, dump)
+  return raw_library_paths
+
+def get_resolved_dep_library_paths_macos(binary_path):
   """
   Returns a map of symbolic to resolved library dependencies of the given binary.
   See resolve_library_paths_macos().
   """
-  dump = objdump_private_headers(binary_path)
-  raw_library_paths = parse_objdump_macos(LC_LOAD_DYLIB, dump)
-  rpaths = parse_objdump_macos(LC_RPATH, dump)
+  raw_library_paths = get_raw_dep_library_paths_macos(binary_path)
+  rpaths = parse_load_commands_macos(LC_RPATH, dump)
   return resolve_library_paths_macos(raw_library_paths, rpaths)
 
 def get_artifact_name():
@@ -297,7 +307,7 @@ def relocate_deps_macos(target_src, target_dst, config):
   """
   See relocate_deps(). macOS implementation.
   """
-  target_deps = get_dep_library_paths_macos(target_src)
+  target_deps = get_resolved_dep_library_paths_macos(target_src)
 
   check_for_command('install_name_tool')
 
