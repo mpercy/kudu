@@ -276,33 +276,50 @@ def relocate_deps_linux(target_src, target_dst, config):
   # dependencies in a relative location.
   chrpath(target_dst, NEW_RPATH)
 
-def relocate_deps_macos(target_src, target_dst, config):
-  """
-  See relocate_deps(). macOS implementation.
-  """
-  libs = get_dep_library_paths_macos(target_src)
-
+def fix_rpath_macos(target_dst):
   check_for_command('install_name_tool')
-
-  for (search_name, resolved_path) in libs.iteritems():
-    # Filter out libs we don't want to archive.
-    if PAT_MACOS_LIB_EXCLUDE.search(resolved_path):
-      continue
-
-    # Archive the rest of the runtime dependencies.
-    lib_dst = os.path.join(config[ARTIFACT_LIB_DIR], os.path.basename(resolved_path))
-    copy_file(resolved_path, lib_dst)
-
-    # Change library search path or name for each archived library.
-    modified_search_name = re.sub('^.*/', '@rpath/', search_name)
-    subprocess.check_call(['install_name_tool', '-change',
-                search_name, modified_search_name, target_dst])
-  # Modify the rpath.
-  rpaths = get_rpaths_macos(target_src)
+  rpaths = get_rpaths_macos(target_dst)
   for rpath in rpaths:
     subprocess.check_call(['install_name_tool', '-delete_rpath', rpath, target_dst])
   subprocess.check_call(['install_name_tool', '-add_rpath', '@executable_path/../lib',
                          target_dst])
+
+def relocate_dep_path_macos(target_dst, dep_search_name):
+  """
+  Change library search path to @rpath for the specified search named in the
+  specified binary.
+  """
+  modified_search_name = re.sub('^.*/', '@rpath/', dep_search_name)
+  subprocess.check_call(['install_name_tool', '-change',
+                        dep_search_name, modified_search_name, target_dst])
+
+def relocate_deps_macos(target_src, target_dst, config):
+  """
+  See relocate_deps(). macOS implementation.
+  """
+  target_deps = get_dep_library_paths_macos(target_src)
+
+  check_for_command('install_name_tool')
+
+  # Modify the rpath of the target.
+  fix_rpath_macos(target_dst)
+
+  # For each dependency, relocate the path we will search for it and ensure it
+  # is shipped with the archive.
+  for (dep_search_name, dep_src) in target_deps.iteritems():
+    # Filter out libs we don't want to archive.
+    if PAT_MACOS_LIB_EXCLUDE.search(dep_search_name):
+      continue
+
+    # Change the search path of the specified dep in 'target_dst'.
+    relocate_dep_path_macos(target_dst, dep_search_name)
+
+    # Archive the rest of the runtime dependencies.
+    dep_dst = os.path.join(config[ARTIFACT_LIB_DIR], os.path.basename(dep_src))
+    if not os.path.isfile(dep_dst):
+      # Recursively copy and relocate library dependencies as they are found.
+      copy_file(dep_src, dep_dst)
+      relocate_deps_macos(dep_src, dep_dst, config)
 
 def relocate_deps(target_src, target_dst, config):
   """
