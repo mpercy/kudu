@@ -29,15 +29,32 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.util.HashMap;
+import java.util.Map;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 @InterfaceAudience.Private
 @InterfaceStability.Unstable
 public class KuduBinaryLocator {
+
+  private static final String SASL_PATH_NAME = "SASL_PATH";
+  private static final String KUDU_BIN_DIR_PROP = "kuduBinDir";
   private static final Logger LOG = LoggerFactory.getLogger(KuduBinaryLocator.class);
 
-  private static final String KUDU_BIN_DIR_PROP = "kuduBinDir";
+  @InterfaceAudience.Private
+  @InterfaceStability.Unstable
+  public static class ExecutableInfo {
+    private String exePath;
+    private final Map<String, String> env = new HashMap<>();
+
+    /** Path to the executable. */
+    public void setExePath(String exePath) { this.exePath = exePath; }
+    public String exePath() { return exePath; }
+
+    /** Any environment variables that should be set when running the executable. */
+    public Map<String, String> environment() { return env; }
+  }
 
   /**
    * Find the binary directory within the build tree.
@@ -47,13 +64,16 @@ public class KuduBinaryLocator {
    * - If the `kudu` binary is found on the PATH using `which kudu`,
    * use its parent directory.
    */
-  private static String findBinaryDir() {
+  private static KuduBinaryArtifactInfo findBinaryLocation() {
+    KuduBinaryArtifactInfo info = new KuduBinaryArtifactInfo();
+
     // If kuduBinDir system property is set, use that.
     String kuduBinDirProp = System.getProperty(KUDU_BIN_DIR_PROP);
     if (kuduBinDirProp != null) {
       LOG.info("Using Kudu binary directory specified by system property '{}': {}",
           KUDU_BIN_DIR_PROP, kuduBinDirProp);
-      return kuduBinDirProp;
+      info.binDir = kuduBinDirProp;
+      return info;
     }
 
     try {
@@ -61,7 +81,7 @@ public class KuduBinaryLocator {
       if (extractor.isKuduBinaryJarOnClasspath()) {
         String testTmpDir = TempDirUtils.getTempDirectory("kudu-binary-jar").toString();
         LOG.info("Using Kudu binary jar directory: {}", testTmpDir);
-        return extractor.extractKuduBinary(testTmpDir);
+        return extractor.extractKuduBinaryArtifact(testTmpDir);
       }
     } catch (IOException ex) {
       LOG.warn("Unable to extract a Kudu binary jar", ex);
@@ -77,7 +97,8 @@ public class KuduBinaryLocator {
           String kuduBinary = CharStreams.toString(reader);
           String kuduBinDir = new File(kuduBinary).getParent();
           LOG.info("Using Kudu binary directory found on path with 'which kudu': {}", kuduBinDir);
-          return kuduBinDir;
+          info.binDir = kuduBinDir;
+          return info;
         }
       }
     } catch (IOException | InterruptedException ex) {
@@ -89,18 +110,23 @@ public class KuduBinaryLocator {
   }
 
   /**
-   * @param binName the binary to look for (eg 'kudu-tserver')
+   * @param exeName the binary to look for (eg 'kudu-tserver')
    * @return the absolute path of that binary
    * @throws FileNotFoundException if no such binary is found
    */
-  public static String findBinary(String binName) throws FileNotFoundException {
-    String binDir = findBinaryDir();
-
-    File candidate = new File(binDir, binName);
-    if (candidate.canExecute()) {
-      return candidate.getAbsolutePath();
+  public static ExecutableInfo findBinary(String exeName) throws FileNotFoundException {
+    KuduBinaryArtifactInfo artifactInfo = findBinaryLocation();
+    ExecutableInfo exeInfo = new ExecutableInfo();
+    if (artifactInfo.saslDir != null) {
+      exeInfo.env.put(SASL_PATH_NAME, artifactInfo.saslDir);
     }
-    throw new FileNotFoundException("Cannot find binary " + binName +
-        " in binary directory " + binDir);
+
+    File candidate = new File(artifactInfo.binDir, exeName);
+    if (candidate.canExecute()) {
+      exeInfo.setExePath(candidate.getAbsolutePath());
+      return exeInfo;
+    }
+    throw new FileNotFoundException("Cannot find executable " + exeName +
+        " in binary directory " + artifactInfo.binDir);
   }
 }
