@@ -29,6 +29,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -79,9 +80,10 @@ public class KuduBinaryLocator {
     try {
       KuduBinaryJarExtractor extractor = new KuduBinaryJarExtractor();
       if (extractor.isKuduBinaryJarOnClasspath()) {
-        String testTmpDir = TempDirUtils.getTempDirectory("kudu-binary-jar").toString();
-        LOG.info("Using Kudu binary jar directory: {}", testTmpDir);
-        return extractor.extractKuduBinaryArtifact(testTmpDir);
+        File testTmpDir = TempDirUtils.makeTempDirectory("kudu-binary-jar");
+        TempDirUtils.registerToRecursivelyDeleteOnShutdown(testTmpDir.toPath());
+        LOG.info("Using Kudu binary jar directory: {}", testTmpDir.getAbsolutePath());
+        return extractor.extractKuduBinaryArtifact(testTmpDir.getAbsolutePath());
       }
     } catch (IOException ex) {
       LOG.warn("Unable to extract a Kudu binary jar", ex);

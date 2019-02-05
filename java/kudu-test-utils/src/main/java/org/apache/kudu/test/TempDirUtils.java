@@ -22,8 +22,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 
 /**
  * Utilities for retrieving and creating temp directories.
@@ -43,13 +47,53 @@ public class TempDirUtils {
    * @return temp directory as a file
    * @throws IOException if a temp directory cannot be created
    */
-  public static File getTempDirectory(String prefix) throws IOException {
+  public static File makeTempDirectory(String prefix) throws IOException {
     String testTmpdir = System.getenv("TEST_TMPDIR");
     if (testTmpdir != null) {
       LOG.info("Using the temp directory defined by TEST_TMPDIR: " + testTmpdir);
       return Files.createTempDirectory(Paths.get(testTmpdir), prefix).toFile();
-    } else {
-      return Files.createTempDirectory(prefix).toFile();
     }
+    return Files.createTempDirectory(prefix).toFile();
+  }
+
+  /**
+   * Recursively remove the specified directory.
+   * @param dir directory root to recursively delete
+   * @throws IOException if there is an error deleting the directory
+   */
+  public static void rmTree(Path dir) throws IOException {
+    Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+      @Override
+      public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+          throws IOException {
+        Files.delete(file);
+        return FileVisitResult.CONTINUE;
+      }
+      @Override
+      public FileVisitResult postVisitDirectory(Path dir, IOException exc)
+          throws IOException {
+        if (exc != null) throw exc;
+        Files.delete(dir);
+        return FileVisitResult.CONTINUE;
+      }
+    });
+  }
+
+  /**
+   * Register a JVM shutdown hook to recursively delete the specified directory on JVM shutdown.
+   * @param path directory to delete on shutdown
+   */
+  public static void registerToRecursivelyDeleteOnShutdown(Path path) {
+    final Path absPath = path.toAbsolutePath();
+    Runtime.getRuntime().addShutdownHook(new Thread() {
+      public void run() {
+        if (!absPath.toFile().exists()) return;
+        try {
+          rmTree(absPath);
+        } catch (IOException exc) {
+          LOG.warn("Unable to remove directory tree " + absPath.toString(), exc);
+        }
+      }
+    });
   }
 }
