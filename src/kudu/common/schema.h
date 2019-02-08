@@ -757,6 +757,11 @@ class Schema {
     for (size_t i = 0; i < other.num_columns(); i++) {
       if (!this->cols_[i].Equals(other.cols_[i])) return false;
     }
+    if (this->has_column_ids() != other.has_column_ids()) return false;
+    if (this->has_column_ids()) {
+      if (this->col_ids_ != other.col_ids_) return false;
+      if (this->max_col_id() != other.max_col_id()) return false;
+    }
 
     return true;
   }

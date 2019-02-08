@@ -172,6 +172,7 @@ void Schema::CopyFrom(const Schema& other) {
   col_ids_ = other.col_ids_;
   col_offsets_ = other.col_offsets_;
   id_to_index_ = other.id_to_index_;
+  max_col_id_ = other.max_col_id_;
 
   // We can't simply copy name_to_index_ since the StringPiece keys
   // reference the other Schema's ColumnSchema objects.
