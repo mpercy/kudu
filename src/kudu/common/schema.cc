@@ -397,6 +397,14 @@ Status Schema::GetMappedReadProjection(const Schema& projection,
   for (const ColumnSchema& col : projection.columns()) {
     // Generate a "fake" column id for virtual column schemas.
     if (col.type_info()->is_virtual()) {
+      if (col.is_nullable()) {
+        return Status::InvalidArgument(Substitute("Virtual column $0 $1 must not be nullable",
+                                                  col.name(), col.TypeToString()));
+      }
+      if (!col.has_read_default()) {
+        return Status::InvalidArgument(Substitute("Virtual column $0 $1 must have a default value",
+                                                  col.name(), col.TypeToString()));
+      }
       mapped_cols.push_back(col);
       mapped_ids.push_back(ColumnId(++proj_max_col_id));
       continue;

@@ -104,7 +104,7 @@ TEST_P(DiffScanTest, TestDiffScan) {
     ASSERT_OK(builder.AddColumn("deleted", IS_DELETED,
                                 /*is_nullable=*/ false,
                                 /*read_default=*/ &kIsDeletedDefault,
-                                /*write_default=*/ &kIsDeletedDefault));
+                                /*write_default=*/ nullptr));
   }
   Schema projection = builder.BuildWithoutIds();
   opts.projection = &projection;

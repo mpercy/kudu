@@ -892,7 +892,7 @@ class Schema {
         // Enforce some properties on the virtual column that simplify our
         // implementation.
         DCHECK(!col.is_nullable());
-        DCHECK(col.has_read_default());
+        DCHECK(col.has_read_default()); // TODO(mpercy): Why is this required?
 
         return idx;
       }
