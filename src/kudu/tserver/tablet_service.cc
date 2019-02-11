@@ -173,6 +173,7 @@ using kudu::rpc::RpcContext;
 using kudu::rpc::RpcSidecar;
 using kudu::server::ServerBase;
 using kudu::tablet::AlterSchemaTransactionState;
+using kudu::tablet::MvccSnapshot;
 using kudu::tablet::TABLET_DATA_COPYING;
 using kudu::tablet::TABLET_DATA_DELETED;
 using kudu::tablet::TABLET_DATA_TOMBSTONED;
@@ -2295,6 +2296,15 @@ Status TabletServiceImpl::HandleScanAtSnapshot(const NewScanRequestPB& scan_pb,
   opts.projection = &projection;
   opts.snap_to_include = snap;
   opts.order = scan_pb.order_mode();
+  // If the client specified a start timestamp then this is a diff scan.
+  if (scan_pb.has_snap_start_timestamp()) {
+    if (scan_pb.read_mode() != READ_AT_SNAPSHOT) {
+      return Status::InvalidArgument("Scan start timestamp is only supported "
+                                     "in READ_AT_SNAPSHOT mode");
+    }
+    opts.snap_to_exclude = MvccSnapshot(Timestamp(scan_pb.snap_start_timestamp()));
+    opts.include_deleted_rows = true;
+  }
   RETURN_NOT_OK(tablet->NewRowIterator(std::move(opts), iter));
 
   // Return the picked snapshot timestamp for both READ_AT_SNAPSHOT

@@ -253,6 +253,10 @@ message NewScanRequestPB {
   // See common.proto for further information about read modes.
   optional ReadMode read_mode = 5 [default = READ_LATEST];
 
+  // The start timestamp of a diff scan. If set, 'snap_timestamp' must also be
+  // specified.
+  optional fixed64 snap_start_timestamp = 15;
+
   // The requested snapshot timestamp. This is only used
   // when the read mode is set to READ_AT_SNAPSHOT.
   optional fixed64 snap_timestamp = 6;
