@@ -68,17 +68,28 @@ namespace kudu {
 
 struct IteratorStats;
 
-static const Schema kIntSchema({ ColumnSchema("val", UINT32) }, 1);
+static const bool kIsDeletedReadDefault = false;
+static const Schema kIntSchema({ ColumnSchema("val", UINT32),
+                                 ColumnSchema("is_deleted", IS_DELETED,
+                                              /*is_nullable=*/false,
+                                              /*read_default=*/&kIsDeletedReadDefault) },
+                               /*key_columns=*/1);
 
 // Test iterator which just yields integer rows from a provided
 // vector.
 class VectorIterator : public ColumnwiseIterator {
  public:
-  explicit VectorIterator(vector<uint32_t> ints)
+  VectorIterator(vector<uint32_t> ints, vector<uint8_t> is_deleted)
       : ints_(std::move(ints)),
+        is_deleted_(std::move(is_deleted)),
         cur_idx_(0),
         block_size_(ints_.size()),
         sel_vec_(nullptr) {
+    CHECK_EQ(ints_.size(), is_deleted_.size());
+  }
+
+  explicit VectorIterator(vector<uint32_t> ints)
+      : VectorIterator(ints, vector<uint8_t>(ints.size())) {
   }
 
   // Set the number of rows that will be returned in each
@@ -123,11 +134,21 @@ class VectorIterator : public ColumnwiseIterator {
 
   Status MaterializeColumn(ColumnMaterializationContext* ctx) override {
     ctx->SetDecoderEvalNotSupported();
-    CHECK_EQ(UINT32, ctx->block()->type_info()->physical_type());
     DCHECK_LE(prepared_, ctx->block()->nrows());
 
-    for (size_t i = 0; i < prepared_; i++) {
-      ctx->block()->SetCellValue(i, &(ints_[cur_idx_ + i]));
+    switch (ctx->block()->type_info()->physical_type()) {
+      case UINT32:
+        for (size_t i = 0; i < prepared_; i++) {
+          ctx->block()->SetCellValue(i, &(ints_[cur_idx_ + i]));
+        }
+        break;
+      case BOOL:
+        for (size_t i = 0; i < prepared_; i++) {
+          ctx->block()->SetCellValue(i, &(is_deleted_[cur_idx_ + i]));
+        }
+        break;
+      default:
+        LOG(FATAL) << "unsupported column type in VectorIterator";
     }
 
     return Status::OK();
@@ -157,6 +178,7 @@ class VectorIterator : public ColumnwiseIterator {
 
  private:
   vector<uint32_t> ints_;
+  vector<uint8_t> is_deleted_;
   int cur_idx_;
   int block_size_;
   size_t prepared_;
