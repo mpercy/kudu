@@ -181,3 +181,13 @@ to communicate only the most important known issues.
   or fewer. The maximum allowed number of tablets per server is 2000.
   Consider this limitation when pre-splitting your tables. If you notice slow start-up times,
   you can monitor the number of tablets per server in the web UI.
+
+* There is a RapidJSON parsing bug that can cause the minimum 32-bit signed
+  integer and minimum 64-bit signed integer to be incorrectly detected as
+  unsigned integers when RapidJSON is compiled with a recent version of g\++
+  with optimizations enabled, due to RapidJSON relying on undefined behavior in
+  the parsing implementation. This issue has been observed in unit tests when
+  compiling RapidJSON using g++ with -O3 optimizations enabled on Ubuntu xenial
+  and Ubuntu bionic and will be fixed by upgrading from RapidJSON 0.11 in a
+  future release. See
+  link:https://issues.apache.org/jira/browse/KUDU-2716[KUDU-2716] for details.
