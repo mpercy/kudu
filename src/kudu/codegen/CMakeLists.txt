@@ -67,9 +67,28 @@ endforeach()
 if (APPLE)
   # OS X keeps the libc++ headers in a non-standard location that the thirdparty
   # Clang does not know about by default.
+  EXECUTE_PROCESS (COMMAND
+    xcode-select -p
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE XCODE_SELECTED_PATH)
   set(PREFIXED_IR_INCLUDES
     ${PREFIXED_IR_INCLUDES}
-    -cxx-isystem "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1")
+    -cxx-isystem "${XCODE_SELECTED_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1")
+
+  # macOS provides the `xcrun` command to find the location of the Xcode SDK.
+  # However, `xcrun` may prefer the xcode commandline tools over a "real" Xcode
+  # installation in some cases; if this is the case then uninstall the command
+  # line tools.
+  #
+  # See https://developer.apple.com/documentation/xcode_release_notes/xcode_10_release_notes
+  EXECUTE_PROCESS (COMMAND
+    xcrun --show-sdk-path
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE SDKPATH)
+
+  set(PREFIXED_IR_INCLUDES
+    ${PREFIXED_IR_INCLUDES}
+    --sysroot="${SDKPATH}")
 endif()
 
 # Get preprocessing definitions, which enable directives for glog and gtest.
@@ -88,22 +107,6 @@ set(IR_FLAGS
   ${CMAKE_CXX_FLAGS}
   ${PREFIXED_IR_PP_DEFS}
   ${PREFIXED_IR_INCLUDES})
-
-# /usr/include doesn't have the necessary headers on macOS 10.14 (Mojave) with
-# Xcode 10[1]. In this case the --sysroot has to be set to the output of "xcrun
-# --show-sdk-path" for the thirdparty clang-6.0 to work correctly.
-#
-# [1] https://developer.apple.com/documentation/xcode_release_notes/xcode_10_release_notes
-if (APPLE AND NOT EXISTS /usr/include/libc.h)
-  EXECUTE_PROCESS (COMMAND
-    xcrun --show-sdk-path
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE SDKPATH)
-
-  set(IR_FLAGS
-    ${IR_FLAGS}
-    --sysroot="${SDKPATH}")
-endif()
 
 # Provide clang with any explicitly defined system prefix path. If there isn't
 # one, clang will search for it on its own.
