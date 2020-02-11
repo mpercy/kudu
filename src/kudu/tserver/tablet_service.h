@@ -252,6 +252,10 @@ class ConsensusServiceImpl : public consensus::ConsensusServiceIf {
                                   consensus::UnsafeChangeConfigResponsePB* resp,
                                   rpc::RpcContext* context) OVERRIDE;
 
+  virtual void ChangeProxyTopology(const consensus::ChangeProxyTopologyRequestPB* req,
+                                  consensus::ChangeProxyTopologyResponsePB* resp,
+                                  rpc::RpcContext* context) OVERRIDE;
+
   virtual void GetNodeInstance(const consensus::GetNodeInstanceRequestPB* req,
                                consensus::GetNodeInstanceResponsePB* resp,
                                rpc::RpcContext* context) OVERRIDE;

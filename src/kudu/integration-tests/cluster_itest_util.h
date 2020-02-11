@@ -336,6 +336,13 @@ Status BulkChangeConfig(const TServerDetails* leader,
                         const boost::optional<int64_t>& cas_config_index = boost::none,
                         tserver::TabletServerErrorPB::Code* error_code = nullptr);
 
+// Convenience function for proxy topology change.
+Status ChangeProxyTopology(const TServerDetails* leader,
+                          const std::string& tablet_id,
+                          const consensus::ProxyTopologyPB& new_topology,
+                          const MonoDelta& timeout,
+                          tserver::TabletServerErrorPB::Code* error_code = nullptr);
+
 // Get the list of tablets from the remote server.
 Status ListTablets(const TServerDetails* ts,
                    const MonoDelta& timeout,
