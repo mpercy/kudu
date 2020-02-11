@@ -235,7 +235,10 @@ enum class BindMode {
 #if defined(__APPLE__)
   static constexpr const BindMode kDefaultBindMode = BindMode::LOOPBACK;
 #else
-  static constexpr const BindMode kDefaultBindMode = BindMode::UNIQUE_LOOPBACK;
+  //static constexpr const BindMode kDefaultBindMode = BindMode::UNIQUE_LOOPBACK;
+  // FIXME(mpercy): At Facebook with IPv6 and 32-bit PIDs, we can't support
+  // UNIQUE_LOOPBACK in its current form.
+  static constexpr const BindMode kDefaultBindMode = BindMode::LOOPBACK;
 #endif
 
 // Return the IP address that the daemon will bind to. If bind_mode is LOOPBACK,
