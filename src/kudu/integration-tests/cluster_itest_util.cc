@@ -957,6 +957,31 @@ Status BulkChangeConfig(const TServerDetails* leader,
   return Status::OK();
 }
 
+Status ChangeProxyTopology(const TServerDetails* leader,
+                          const std::string& tablet_id,
+                          const consensus::ProxyTopologyPB& new_topology,
+                          const MonoDelta& timeout,
+                          tserver::TabletServerErrorPB::Code* error_code) {
+  consensus::ChangeProxyTopologyRequestPB req;
+  req.set_dest_uuid(leader->uuid());
+  req.set_tablet_id(tablet_id);
+  *req.mutable_new_config() = new_topology;
+
+  consensus::ChangeProxyTopologyResponsePB resp;
+  RpcController rpc;
+  rpc.set_timeout(timeout);
+
+  RETURN_NOT_OK(leader->consensus_proxy->ChangeProxyTopology(req, &resp, &rpc));
+  if (resp.has_error()) {
+    if (error_code) {
+      *error_code = resp.error().code();
+    }
+    return StatusFromPB(resp.error().status());
+  }
+  return Status::OK();
+}
+
+
 Status ListTablets(const TServerDetails* ts,
                    const MonoDelta& timeout,
                    vector<ListTabletsResponsePB::StatusAndSchemaPB>* tablets) {
