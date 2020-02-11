@@ -369,6 +369,13 @@ class PeerMessageQueue {
   void BeginWatchForSuccessor(const boost::optional<std::string>& successor_uuid);
   void EndWatchForSuccessor();
 
+  // TODO(mpercy): It's probably not safe in general to access a queue's log
+  // cache via bare pointer, since (IIRC) a queue will be reconstructed
+  // transitioning to/from leader. Check this.
+  LogCache* log_cache() {
+    return &log_cache_;
+  }
+
  private:
   FRIEND_TEST(ConsensusQueueTest, TestQueueAdvancesCommittedIndex);
   FRIEND_TEST(ConsensusQueueTest, TestQueueMovesWatermarksBackward);

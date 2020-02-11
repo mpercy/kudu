@@ -39,6 +39,7 @@ void MiniClusterITestBase::StartCluster(int num_tablet_servers) {
   opts.num_tablet_servers = num_tablet_servers;
   cluster_.reset(new InternalMiniCluster(env_, opts));
   ASSERT_OK(cluster_->Start());
+  inspect_.reset(new itest::MiniClusterFsInspector(cluster_.get()));
   ASSERT_OK(cluster_->CreateClient(nullptr, &client_));
   ASSERT_OK(itest::CreateTabletServerMap(cluster_->master_proxy(),
                                          cluster_->messenger(),
@@ -49,6 +50,7 @@ void MiniClusterITestBase::StopCluster() {
   if (!cluster_) return;
 
   cluster_->Shutdown();
+  inspect_.reset();
   cluster_.reset();
   client_.reset();
   STLDeleteValues(&ts_map_);
