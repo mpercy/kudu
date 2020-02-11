@@ -221,6 +221,28 @@ extern const char* CFILE_CACHE_HIT_BYTES_METRIC_NAME;
 
 namespace tserver {
 
+static void SetupErrorAndRespond(TabletServerErrorPB* error,
+                                 const Status& s,
+                                 TabletServerErrorPB::Code code,
+                                 rpc::RpcContext* context) {
+  // Non-authorized errors will drop the connection.
+  if (code == TabletServerErrorPB::NOT_AUTHORIZED) {
+    DCHECK(s.IsNotAuthorized());
+    context->RespondRpcFailure(rpc::ErrorStatusPB::FATAL_UNAUTHORIZED, s);
+    return;
+  }
+  // Generic "service unavailable" errors will cause the client to retry later.
+  if ((code == TabletServerErrorPB::UNKNOWN_ERROR ||
+       code == TabletServerErrorPB::THROTTLED) && s.IsServiceUnavailable()) {
+    context->RespondRpcFailure(rpc::ErrorStatusPB::ERROR_SERVER_TOO_BUSY, s);
+    return;
+  }
+
+  StatusToPB(s, error->mutable_status());
+  error->set_code(code);
+  context->RespondNoCache();
+}
+
 namespace {
 
 // Lookup the given tablet, only ensuring that it exists.
@@ -306,11 +328,11 @@ bool LookupRunningTabletReplicaOrRespond(TabletReplicaLookupIf* tablet_manager,
 }
 
 template<class ReqClass, class RespClass>
-bool CheckUuidMatchOrRespond(TabletReplicaLookupIf* tablet_manager,
-                             const char* method_name,
-                             const ReqClass* req,
-                             RespClass* resp,
-                             rpc::RpcContext* context) {
+bool CheckUuidMatchOrRespondGeneric(TabletReplicaLookupIf* tablet_manager,
+                                    const char* method_name,
+                                    const ReqClass* req,
+                                    RespClass* resp,
+                                    rpc::RpcContext* context) {
   const string& local_uuid = tablet_manager->NodeInstance().permanent_uuid();
   if (PREDICT_FALSE(!req->has_dest_uuid())) {
     // Maintain compat in release mode, but complain.
@@ -334,6 +356,38 @@ bool CheckUuidMatchOrRespond(TabletReplicaLookupIf* tablet_manager,
     return false;
   }
   return true;
+}
+
+template<class ReqClass, class RespClass>
+bool CheckUuidMatchOrRespond(TabletReplicaLookupIf* tablet_manager,
+                             const char* method_name,
+                             const ReqClass* req,
+                             RespClass* resp,
+                             rpc::RpcContext* context) {
+  return CheckUuidMatchOrRespondGeneric(tablet_manager, method_name, req, resp, context);
+}
+
+template<>
+bool CheckUuidMatchOrRespond(TabletReplicaLookupIf* tablet_manager,
+                             const char* method_name,
+                             const ConsensusRequestPB* req,
+                             ConsensusResponsePB* resp,
+                             rpc::RpcContext* context) {
+  const string& local_uuid = tablet_manager->NodeInstance().permanent_uuid();
+  if (req->has_proxy_dest_uuid()) {
+    if (PREDICT_FALSE(req->proxy_dest_uuid() != local_uuid)) {
+      Status s = Status::InvalidArgument(Substitute("$0: Wrong proxy UUID requested. "
+                                                    "Local UUID: $1. Requested UUID: $2",
+                                                    method_name, local_uuid, req->proxy_dest_uuid()));
+      LOG(WARNING) << s.ToString() << ": from " << context->requestor_string()
+                  << ": " << SecureShortDebugString(*req);
+      SetupErrorAndRespond(resp->mutable_error(), s,
+                          TabletServerErrorPB::WRONG_SERVER_UUID, context);
+      return false;
+    }
+    return true;
+  }
+  return CheckUuidMatchOrRespondGeneric(tablet_manager, method_name, req, resp, context);
 }
 
 template<class RespClass>
@@ -601,28 +655,6 @@ static bool VerifyAuthzTokenOrRespond(const TokenVerifier& token_verifier,
   }
   *token = std::move(token_pb);
   return true;
-}
-
-static void SetupErrorAndRespond(TabletServerErrorPB* error,
-                                 const Status& s,
-                                 TabletServerErrorPB::Code code,
-                                 rpc::RpcContext* context) {
-  // Non-authorized errors will drop the connection.
-  if (code == TabletServerErrorPB::NOT_AUTHORIZED) {
-    DCHECK(s.IsNotAuthorized());
-    context->RespondRpcFailure(rpc::ErrorStatusPB::FATAL_UNAUTHORIZED, s);
-    return;
-  }
-  // Generic "service unavailable" errors will cause the client to retry later.
-  if ((code == TabletServerErrorPB::UNKNOWN_ERROR ||
-       code == TabletServerErrorPB::THROTTLED) && s.IsServiceUnavailable()) {
-    context->RespondRpcFailure(rpc::ErrorStatusPB::ERROR_SERVER_TOO_BUSY, s);
-    return;
-  }
-
-  StatusToPB(s, error->mutable_status());
-  error->set_code(code);
-  context->RespondNoCache();
 }
 
 template <class ReqType, class RespType>
@@ -1244,6 +1276,13 @@ void ConsensusServiceImpl::UpdateConsensus(const ConsensusRequestPB* req,
   // Submit the update directly to the TabletReplica's RaftConsensus instance.
   shared_ptr<RaftConsensus> consensus;
   if (!GetConsensusOrRespond(replica, resp, context, &consensus)) return;
+
+  // Fast path for proxy requests.
+  if (consensus->IsProxyRequest(req)) {
+    consensus->HandleProxyRequest(req, resp, context);
+    return;
+  }
+
   Status s = consensus->Update(req, resp);
   if (PREDICT_FALSE(!s.ok())) {
     // Clear the response first, since a partially-filled response could

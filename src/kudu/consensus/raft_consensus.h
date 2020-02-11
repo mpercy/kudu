@@ -66,6 +66,7 @@ class Callback;
 
 namespace rpc {
 class PeriodicTimer;
+class RpcContext;
 }
 
 namespace consensus {
@@ -384,6 +385,15 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   int64_t MetadataOnDiskSize() const;
 
   int64_t GetMillisSinceLastLeaderHeartbeat() const;
+
+  // Returns true if the request is intended to be proxied.
+  bool IsProxyRequest(const ConsensusRequestPB* request) const;
+
+  // Handle proxy RPC request.
+  // This method is intended to be executed on an RPC worker thread.
+  void HandleProxyRequest(const ConsensusRequestPB* request,
+                          ConsensusResponsePB* response,
+                          rpc::RpcContext* context);
 
  protected:
   RaftConsensus(ConsensusOptions options,
