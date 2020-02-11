@@ -94,6 +94,7 @@ enum OperationType {
   WRITE_OP = 3;
   ALTER_SCHEMA_OP = 4;
   CHANGE_CONFIG_OP = 5;
+  PROXY_OP = 6;
 }
 
 // The transaction driver type: indicates whether a transaction is
@@ -115,6 +116,11 @@ message ChangeConfigRecordPB {
 
   // The new configuration to set the configuration to.
   required RaftConfigPB new_config = 3;
+}
+
+message ProxyRecordPB {
+  // The destination server intended to receive this message.
+  optional bytes dest_server = 1;
 }
 
 enum ChangeConfigType {
@@ -203,6 +209,7 @@ message ReplicateMsg {
   optional tserver.WriteRequestPB write_request = 5;
   optional tserver.AlterSchemaRequestPB alter_schema_request = 6;
   optional ChangeConfigRecordPB change_config_record = 7;
+  optional ProxyRecordPB proxy_record = 9;
 
   // The client's request id for this message, if it is set.
   optional rpc.RequestIdPB request_id = 8;
@@ -333,10 +340,18 @@ message ConsensusRequestPB {
   // UUID of server this request is addressed to.
   optional bytes dest_uuid = 7;
 
+  // UUID of server intended to proxy this request.
+  // Only set if this request is intended to be proxied.
+  optional bytes proxy_dest_uuid = 12;
+
   required string tablet_id = 1;
 
   // The uuid of the peer making the call.
   required bytes caller_uuid = 2;
+
+  // UUID of server proxying this request.
+  // Only set if this request was proxied on behalf of the leader.
+  optional bytes proxy_caller_uuid = 13;
 
   // The caller's term. As only leaders can send messages,
   // replicas will accept all messages as long as the term

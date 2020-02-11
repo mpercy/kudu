@@ -62,13 +62,13 @@ Status RoutingTable::ConstructForest(
   }
   // Organize the peers into a forest of trees.
   for (const RaftPeerPB& peer : config.peers()) {
-    if (peer.proxy_from().empty()) {
+    if (peer.attrs().proxy_from().empty()) {
       continue;
     }
 
     // Node has a parent so we must link them and assign ownership to the
     // parent.
-    const string& parent_uuid = peer.proxy_from();
+    const string& parent_uuid = peer.attrs().proxy_from();
     Node* parent_ptr = FindWithDefault(*index, parent_uuid, nullptr);
     if (!parent_ptr) {
       return Status::InvalidArgument("invalid config: cannot find proxy",

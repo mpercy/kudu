@@ -28,6 +28,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
@@ -46,6 +47,7 @@
 #include "kudu/consensus/peer_manager.h"
 #include "kudu/consensus/pending_rounds.h"
 #include "kudu/consensus/quorum_util.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/consensus/time_manager.h"
 #include "kudu/gutil/bind.h"
 #include "kudu/gutil/bind_helpers.h"
@@ -58,6 +60,7 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/rpc/periodic.h"
+#include "kudu/rpc/rpc_context.h"
 #include "kudu/util/async_util.h"
 #include "kudu/util/debug/trace_event.h"
 #include "kudu/util/flag_tags.h"
@@ -133,7 +136,16 @@ DEFINE_bool(raft_prepare_replacement_before_eviction, true,
 TAG_FLAG(raft_prepare_replacement_before_eviction, advanced);
 TAG_FLAG(raft_prepare_replacement_before_eviction, experimental);
 
+DEFINE_bool(raft_enable_multi_hop_proxy_routing, true,
+            "Enables multi-hop routing. When disabled, causes any tablet "
+            "server acting as a proxy to forward any incoming replication "
+            "request directly to the destination node, if it is part of the "
+            "active config.");
+TAG_FLAG(raft_enable_multi_hop_proxy_routing, advanced);
+TAG_FLAG(raft_enable_multi_hop_proxy_routing, runtime);
+
 DECLARE_int32(memory_limit_warn_threshold_percentage);
+DECLARE_int32(consensus_max_batch_size_bytes); // defined in consensus_queue (expose as method?)
 
 // Metrics
 // ---------
@@ -173,6 +185,7 @@ using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
 using std::unordered_set;
+using std::vector;
 using std::weak_ptr;
 using strings::Substitute;
 
@@ -1261,8 +1274,8 @@ Status RaftConsensus::CheckLeaderRequestUnlocked(const ConsensusRequestPB* reque
   for (const ReplicateRefPtr& message : deduped_req->messages) {
     s = PendingRounds::CheckOpInSequence(*prev, message->get()->id());
     if (PREDICT_FALSE(!s.ok())) {
-      LOG(ERROR) << "Leader request contained out-of-sequence messages. Status: "
-          << s.ToString() << ". Leader Request: " << SecureShortDebugString(*request);
+      LOG_WITH_PREFIX_UNLOCKED(ERROR) << "Leader request contained out-of-sequence messages. "
+          << "Status: " << s.ToString() << ". Leader Request: " << SecureShortDebugString(*request);
       break;
     }
     prev = &message->get()->id();
@@ -1964,6 +1977,7 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
           break;
 
         case MODIFY_PEER: {
+          LOG(INFO) << "modifying peer" << peer.ShortDebugString();
           RaftPeerPB* modified_peer;
           RETURN_NOT_OK(GetRaftConfigMember(&new_config, server_uuid, &modified_peer));
           const RaftPeerPB orig_peer(*modified_peer);
@@ -1993,6 +2007,9 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
           }
           if (peer.attrs().has_replace()) {
             modified_peer->mutable_attrs()->set_replace(peer.attrs().replace());
+          }
+          if (peer.attrs().has_proxy_from()) {
+            modified_peer->mutable_attrs()->set_proxy_from(peer.attrs().proxy_from());
           }
           // Ensure that MODIFY_PEER actually modified something.
           if (MessageDifferencer::Equals(orig_peer, *modified_peer)) {
@@ -3203,6 +3220,208 @@ ConsensusMetadata* RaftConsensus::consensus_metadata_for_tests() const {
 int64_t RaftConsensus::GetMillisSinceLastLeaderHeartbeat() const {
     return last_leader_communication_time_micros_ == 0 ?
         0 : (GetMonoTimeMicros() - last_leader_communication_time_micros_) / 1000;
+}
+
+bool RaftConsensus::IsProxyRequest(const ConsensusRequestPB* request) const {
+  // We expect proxy_uuid to reflect the uuid of the local node if it's a proxy
+  // request, or to be empty otherwise.
+  return !request->proxy_dest_uuid().empty();
+}
+
+void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
+                                       ConsensusResponsePB* response,
+                                       rpc::RpcContext* context) {
+  RaftConfigPB active_config;
+  string leader_uuid;
+  {
+    // Snapshot the active Raft config so we know how to route proxied messages.
+    ThreadRestrictions::AssertWaitAllowed();
+    LockGuard l(lock_);
+    CHECK_OK(CheckRunningUnlocked()); // TODO(mpercy): Error instead of CHECK
+    active_config = cmeta_->ActiveConfig();
+    leader_uuid = cmeta_->leader_uuid();
+  }
+
+  // Initial implementation:
+  //
+  // Synchronously:
+  // 1. Validate that the request is addressed to the local node via 'proxy_dest_uuid'.
+  // 2. Reconstitute each message from the local cache.
+  //
+  // Asynchronously:
+  // 4. Deliver the reconstituted request directly to the remote (async).
+  // 5. Proxy the response from the remote back to the caller.
+
+  // Validate the request.
+  if (request->proxy_dest_uuid() != peer_uuid()) {
+    // TODO(mpercy): Use the same error type as the usual "bad destination" error.
+    LOG_WITH_PREFIX(WARNING) << "Wrong proxy dest UUID "
+                             << request->proxy_dest_uuid() << ": "
+                             << request->ShortDebugString();
+    context->RespondFailure(Status::InvalidArgument("Bad proxy dest?"));
+    return;
+  }
+  if (request->dest_uuid() == peer_uuid()) {
+    LOG_WITH_PREFIX(WARNING) << "dest_uuid and proxy_dest_uuid are the same: "
+                             << request->proxy_dest_uuid() << ": "
+                             << request->ShortDebugString();
+    context->RespondFailure(Status::InvalidArgument("proxy and desination must be different"));
+    return;
+  }
+
+
+  // TODO(mpercy): Should we validate that everyone involved is in the active config?
+
+  // Construct the downstream request; copy the relevant fields from the
+  // proxied request.
+  ConsensusRequestPB downstream_request;
+  auto prevent_ops_deletion = MakeScopedCleanup([&]() {
+    // Prevent double-deletion of these requests.
+    downstream_request.mutable_ops()->ExtractSubrange(
+      /*start=*/ 0, /*num=*/ downstream_request.ops_size(), /*elements=*/ nullptr);
+  });
+  downstream_request.set_dest_uuid(request->dest_uuid());
+  downstream_request.set_tablet_id(request->tablet_id());
+  downstream_request.set_caller_uuid(request->caller_uuid());
+  downstream_request.set_caller_term(request->caller_term());
+
+  if (request->has_preceding_id()) {
+    *downstream_request.mutable_preceding_id() = request->preceding_id();
+  }
+  if (request->has_committed_index()) {
+    downstream_request.set_committed_index(request->committed_index());
+  }
+  if (request->has_all_replicated_index()) {
+    downstream_request.set_all_replicated_index(request->all_replicated_index());
+  }
+  if (request->has_safe_timestamp()) {
+    downstream_request.set_safe_timestamp(request->safe_timestamp());
+  }
+  if (request->has_last_idx_appended_to_leader()) {
+    downstream_request.set_last_idx_appended_to_leader(request->last_idx_appended_to_leader());
+  }
+
+  downstream_request.set_proxy_caller_uuid(peer_uuid());
+
+  string next_uuid = request->dest_uuid();
+  if (FLAGS_raft_enable_multi_hop_proxy_routing) {
+    // Determine the next hop to send to.
+    if (leader_uuid.empty()) {
+      context->RespondFailure(Status::InvalidArgument("unknown leader: failed to route message"));
+      return;
+    }
+    RoutingTable routing_table; // TODO(mpercy): Cache me.
+    CHECK_OK(routing_table.Init(active_config, leader_uuid));
+    next_uuid = routing_table.NextHop(peer_uuid(), request->dest_uuid());
+  }
+
+  if (request->dest_uuid() != next_uuid) {
+    // Multi-hop proxy request.
+    downstream_request.set_proxy_dest_uuid(next_uuid);
+    // Forward the existing PROXY_OP ops.
+    for (int i = 0; i < request->ops_size(); i++) {
+      *downstream_request.add_ops() = request->ops(i);
+    }
+    prevent_ops_deletion.cancel(); // The ops we copy here are not pre-allocated.
+  } else {
+
+    // Reconstitute from local cache.
+    // TODO(mpercy): Factor this out into its own method.
+
+    // We assume and enforce that a single request is composed of a range of ops.
+    int num_ops = 0;
+    int64_t first_op_index = -1;
+
+    // TODO(mpercy): Return errors instead of crashing below.
+    int64_t max_batch_size = FLAGS_consensus_max_batch_size_bytes - request->ByteSizeLong();
+    for (int i = 0; i < request->ops_size(); i++) {
+      auto& msg = request->ops(i);
+      CHECK_EQ(PROXY_OP, msg.op_type());
+      if (num_ops == 0) {
+        first_op_index = msg.id().index();
+      } else {
+        CHECK_EQ(first_op_index + num_ops, msg.id().index());
+      }
+      num_ops++;
+    }
+    // Now we know that all ops we are reconstituting are consecutive.
+
+    // TODO(mpercy): Check whether we have the event in our LogCache yet. If not,
+    // wait and retry, or subscribe to the event being available. Most likely we
+    // should try be simple / greedy and wait until we have all events in the
+    // cache? Or we could be aggressive and fill what we can?
+
+    OpId preceding_id;
+    vector<ReplicateRefPtr> messages;
+    // TODO(mpercy): Add an API for ReadOps() to take number of ops we want,
+    // instead of the max batch size.
+    if (num_ops > 0) {
+      // TODO(mpercy): Return an error on failure instead of a CHECK!
+      CHECK_OK(queue_->log_cache()->ReadOps(first_op_index - 1,
+                                            max_batch_size,
+                                            &messages,
+                                            &preceding_id));
+    }
+
+    // Reconstitute the proxied ops.
+    for (int i = 0; i < request->ops_size() && i < messages.size(); i++) {
+      // Ensure that the OpIds match.
+      // TODO(mpercy): Return an error instead of a CHECK!
+      CHECK(OpIdEquals(request->ops(i).id(), messages[i]->get()->id()));
+      downstream_request.mutable_ops()->AddAllocated(messages[i]->get());
+    }
+
+  }
+
+  VLOG_WITH_PREFIX(3) << "Downstream proxy request: " << SecureShortDebugString(downstream_request);
+
+  // Asynchronously:
+  // Send the request to the remote.
+  //
+  // Find the address of the remote given our local config.
+  RaftPeerPB* next_peer_pb;
+  CHECK_OK(GetRaftConfigMember(&active_config, next_uuid, &next_peer_pb)); // TODO(mpercy): Remove CHECK
+  CHECK(next_peer_pb->has_last_known_addr()) << "no known addr for peer"; // TODO(mpercy): Remove CHECK
+
+  // Create a consensus proxy
+  gscoped_ptr<PeerProxy> next_proxy;
+  CHECK_OK(peer_proxy_factory_->NewProxy(*next_peer_pb, &next_proxy));
+
+  // TODO(mpercy): Make the proxy
+  ConsensusResponsePB downstream_response;
+  rpc::RpcController controller;
+
+  // Here, we turn an async API into a blocking one with a CountdownLatch.
+  // TODO(mpercy): Don't be so shady.
+  CountDownLatch latch(/*count=*/1);
+  rpc::ResponseCallback callback = [&latch] { latch.CountDown(); };
+  next_proxy->UpdateAsync(downstream_request, &downstream_response, &controller, callback);
+  latch.Wait(); // TODO(mpercy): Wait with a timeout.
+
+  // Once we reach this point, our result is in 'controller' and
+  // 'downstream_response'. We need to marshall an appropriate response into
+  // 'response' and then respond via 'context'.
+  CHECK_OK(controller.status()); // TODO handle RPC remote errors
+
+  // We just fully proxy what we got.
+  // TODO(mpercy): Do we need to transform anything?
+  // Also, if we have a proxying error, should we try to proxy back information
+  // about the node at which the error occurred other than a text string in a
+  // status message?
+  if (downstream_response.has_responder_uuid()) {
+    response->set_responder_uuid(downstream_response.responder_uuid());
+  }
+  if (downstream_response.has_responder_term()) {
+    response->set_responder_term(downstream_response.responder_term());
+  }
+  if (downstream_response.has_status()) {
+    *response->mutable_status() = downstream_response.status();
+  }
+  if (downstream_response.has_error()) {
+    *response->mutable_error() = downstream_response.error();
+  }
+
+  context->RespondSuccess();
 }
 
 ////////////////////////////////////////////////////////////////////////

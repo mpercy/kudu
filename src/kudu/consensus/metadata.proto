@@ -35,6 +35,10 @@ message RaftPeerAttrsPB {
   // If set to 'true', the replica needs to be replaced regardless of
   // its health report.
   optional bool replace = 2 [ default = false ];
+
+  // Optional node to receive replicate messges from, instead of directly from
+  // the leader.
+  optional bytes proxy_from = 3;
 }
 
 // Report on a replica's (peer's) health.
@@ -103,10 +107,6 @@ message RaftPeerPB {
   optional bytes permanent_uuid = 1;
   optional MemberType member_type = 2;
   optional HostPortPB last_known_addr = 3;
-
-  // Optional node to receive replicate messges from, instead of directly from
-  // the leader.
-  optional bytes proxy_from = 6;
 
   // Replica attributes.
   optional RaftPeerAttrsPB attrs = 4;
