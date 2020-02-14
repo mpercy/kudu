@@ -50,7 +50,7 @@ constexpr auto MHP_H = MajorityHealthPolicy::HONOR; // NOLINT(readability-identi
 constexpr auto MHP_I = MajorityHealthPolicy::IGNORE;// NOLINT(readability-identifier-naming)
 
 // The various possible health statuses.
-constexpr auto kHealthStatuses = { '?', '-', 'x', '+' };
+const auto kHealthStatuses = { '?', '-', 'x', '+' };
 
 typedef std::pair<string, bool> Attr;
 
