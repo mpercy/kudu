@@ -107,6 +107,7 @@ set(CONSENSUS_SRCS
   pending_rounds.cc
   quorum_util.cc
   raft_consensus.cc
+  routing.cc
   time_manager.cc
 )
 
@@ -138,6 +139,7 @@ ADD_KUDU_TEST(log_index-test)
 ADD_KUDU_TEST(mt-log-test PROCESSORS 5)
 ADD_KUDU_TEST(quorum_util-test)
 ADD_KUDU_TEST(raft_consensus_quorum-test)
+ADD_KUDU_TEST(routing-test)
 ADD_KUDU_TEST(time_manager-test)
 
 # Our current version of gmock overrides virtual functions without adding
