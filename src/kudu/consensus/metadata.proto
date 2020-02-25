@@ -104,6 +104,10 @@ message RaftPeerPB {
   optional MemberType member_type = 2;
   optional HostPortPB last_known_addr = 3;
 
+  // Optional node to receive replicate messges from, instead of directly from
+  // the leader.
+  optional bytes proxy_from = 6;
+
   // Replica attributes.
   optional RaftPeerAttrsPB attrs = 4;
 
