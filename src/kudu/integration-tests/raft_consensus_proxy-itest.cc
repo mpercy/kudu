@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -37,9 +38,13 @@
 #include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
 
+using boost::optional;
 using kudu::consensus::ConsensusRequestPB;
 using kudu::consensus::ConsensusResponsePB;
+using kudu::consensus::ConsensusStatePB;
 using kudu::consensus::MakeOpId;
+using kudu::consensus::OpId;
+using kudu::consensus::RaftConfigPB;
 using kudu::consensus::ReplicateMsg;
 using kudu::cluster::ExternalTabletServer;
 using kudu::cluster::ScopedResumeExternalDaemon;
@@ -50,28 +55,70 @@ using std::vector;
 using strings::Substitute;
 
 namespace kudu {
+namespace itest {
 
 // Test Raft consensus proxying behavior.
-class RaftConsensusProxyITest : public ExternalMiniClusterITestBase {};
+class RaftConsensusProxyITest : public ExternalMiniClusterITestBase {
+ protected:
+  // FIXME(mpercy): Temporarily disabling encryption / auth due to DNS issues
+  // on my dev box.
+  vector<string> ts_flags_ = { "--enable_leader_failure_detection=false",
+                               "--rpc_encryption=disabled",
+                               "--rpc_authentication=disabled" };
+  vector<string> master_flags_ = { "--catalog_manager_wait_for_new_tablets_to_elect_leader=false",
+                                   "--rpc_encryption=disabled",
+                                   "--rpc_authentication=disabled",
+                                   "--allow_unsafe_replication_factor" };
+
+  void SendNoOp(string tablet_id, string src, string dest_uuid,
+                optional<string> proxy_uuid, OpId opid, string payload);
+};
+
+void RaftConsensusProxyITest::SendNoOp(string tablet_id, string src_uuid, string dest_uuid,
+                                       optional<string> proxy_uuid, OpId opid, string payload) {
+
+  TServerDetails* dest_ts = FindOrDie(ts_map_, dest_uuid);
+  TServerDetails* next_ts = dest_ts;
+  if (proxy_uuid) {
+    next_ts = FindOrDie(ts_map_, *proxy_uuid);
+  }
+
+  // Construct and send a replicate message to the proxy, via the proxy to the
+  // downstream ts.
+  ConsensusRequestPB req;
+  req.set_dest_uuid(std::move(dest_uuid));
+  req.set_tablet_id(std::move(tablet_id));
+  req.set_caller_uuid(std::move(src_uuid));
+  req.set_caller_term(opid.term());
+  req.set_all_replicated_index(0);
+  req.set_committed_index(0);
+
+  ReplicateMsg* msg = req.mutable_ops()->Add();
+  *msg->mutable_id() = std::move(opid);
+  msg->set_timestamp(0);
+  if (!proxy_uuid) {
+    msg->set_op_type(consensus::NO_OP);
+    msg->mutable_noop_request()->set_payload_for_tests(payload);
+  } else {
+    msg->set_op_type(consensus::PROXY_OP);
+    req.set_proxy_dest_uuid(*proxy_uuid);
+  }
+
+  ConsensusResponsePB resp;
+  RpcController controller;
+  ASSERT_OK(next_ts->consensus_proxy->UpdateConsensus(req, &resp, &controller));
+  ASSERT_FALSE(resp.has_error()) << resp.ShortDebugString();
+}
 
 // Test that we can delete the leader replica while scanning it and still get
 // results back.
-TEST_F(RaftConsensusProxyITest, ProxyFakeLeader) {
+TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderNoRouting) {
   const int kNumReplicas = 2;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
 
-  // FIXME(mpercy): Temporarily disabling encryption / auth due to DNS issues
-  // on my dev box.
-  vector<string> ts_flags = { "--enable_leader_failure_detection=false",
-                              "--rpc_encryption=disabled",
-                              "--rpc_authentication=disabled",
-                              "--raft_enable_multi_hop_proxy_routing=false" }; // for fake leader
-  vector<string> master_flags = { "--catalog_manager_wait_for_new_tablets_to_elect_leader=false",
-                                  "--rpc_encryption=disabled",
-                                  "--rpc_authentication=disabled",
-                                  "--allow_unsafe_replication_factor" };
+  ts_flags_.push_back("--raft_enable_multi_hop_proxy_routing=false"); // for fake leader
 
-  NO_FATALS(StartCluster(ts_flags, master_flags, /*num_tablet_servers=*/ kNumReplicas));
+  NO_FATALS(StartCluster(ts_flags_, master_flags_, /*num_tablet_servers=*/ kNumReplicas));
 
   // Create the test table.
   TestWorkload workload(cluster_.get());
@@ -98,40 +145,71 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeader) {
   SCOPED_TRACE(Substitute("downstream ts uuid: $0", downstream_ts->uuid()));
 
   const string kFakeLeaderUuid = "fake-leader";
-  const int kTerm = 1;
+  auto opid = MakeOpId(1, 1);
 
-  // Construct and send a replicate message to the proxy, via the proxy to the
-  // downstream ts.
-  ConsensusRequestPB req;
-  req.set_dest_uuid(proxy_ts->uuid());
-  req.set_tablet_id(tablet_id);
-  req.set_caller_uuid(kFakeLeaderUuid);
-  req.set_caller_term(kTerm);
-  req.set_all_replicated_index(0);
-  req.set_committed_index(0);
-
-  ReplicateMsg* msg = req.mutable_ops()->Add();
-  *msg->mutable_id() = MakeOpId(1, 1);
-  msg->set_timestamp(0);
-  msg->set_op_type(consensus::NO_OP);
-  msg->mutable_noop_request()->set_payload_for_tests(kFakeLeaderUuid);
-
-  ConsensusResponsePB resp;
-  RpcController controller;
-  ASSERT_OK(proxy_ts->consensus_proxy->UpdateConsensus(req, &resp, &controller));
-  ASSERT_FALSE(resp.has_error()) << resp.ShortDebugString();
-  controller.Reset();
-
-  req.set_dest_uuid(downstream_ts->uuid());
-  req.set_proxy_dest_uuid(proxy_ts->uuid());
-  msg->set_op_type(consensus::PROXY_OP);
-  msg->clear_noop_request();
-  ASSERT_OK(proxy_ts->consensus_proxy->UpdateConsensus(req, &resp, &controller));
-  ASSERT_FALSE(resp.has_error()) << resp.ShortDebugString();
-
-  // TODO: validate that all the servers have 1.1
-
+  NO_FATALS(SendNoOp(tablet_id, kFakeLeaderUuid, proxy_ts->uuid(),
+                     /*proxy_uuid=*/ boost::none, opid, /*payload=*/ kFakeLeaderUuid));
+  NO_FATALS(SendNoOp(tablet_id, kFakeLeaderUuid, downstream_ts->uuid(),
+                     proxy_ts->uuid(), opid, /*payload=*/ kFakeLeaderUuid));
   ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/1));
 }
 
+// Write another test with a fake leader
+TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
+  // Desired test topology, with A* as the leader:
+  //
+  //      A* -> B -> C -> D
+  //
+  const int kNumReplicas = 4;
+  const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
+  NO_FATALS(StartCluster(ts_flags_, master_flags_, /*num_tablet_servers=*/ kNumReplicas));
+
+  // Create the test table.
+  TestWorkload workload(cluster_.get());
+  workload.set_num_replicas(kNumReplicas);
+  workload.Setup();
+
+  // Determine the generated tablet id.
+  ASSERT_OK(inspect_->WaitForReplicaCount(kNumReplicas));
+  vector<string> tablets = inspect_->ListTablets();
+  ASSERT_EQ(1, tablets.size());
+  const string& tablet_id = tablets[0];
+
+  const int kLeaderIndex = 0; // first ts is the leader
+  TServerDetails* leader = ts_map_[cluster_->tablet_server(kLeaderIndex)->uuid()];
+  ASSERT_OK(itest::StartElection(leader, tablet_id, kTimeout));
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/ 1));
+
+  // Change the toplogy to look like TS0, TS1 -> TS2 -> TS3.
+  ConsensusStatePB cstate;
+  ASSERT_OK(WaitUntilNoPendingConfig(leader, tablet_id, kTimeout, &cstate));
+
+  RaftConfigPB new_config = cstate.committed_config();
+  ASSERT_EQ(4, new_config.peers_size());
+
+  vector<consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB> changes;
+  for (int i = 1; i < kNumReplicas; i++) {
+    consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB change_pb;
+    change_pb.mutable_peer()->set_permanent_uuid(cluster_->tablet_server(i)->uuid());
+    if (i > 1) {
+      change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
+          cluster_->tablet_server(i - 1)->uuid());
+    }
+  }
+  ASSERT_OK(BulkChangeConfig(leader, tablet_id, changes, kTimeout));
+
+  // Now kill the leader, pretend we are the leader, and proxy messages to the
+  // non-leaders.
+  string leader_uuid = cluster_->tablet_server(kLeaderIndex)->uuid();
+  string proxy_uuid = cluster_->tablet_server(1)->uuid();
+  cluster_->tablet_server(kLeaderIndex)->Shutdown();
+  for (int i = 1; i < kNumReplicas; i++) {
+    string dest_uuid = cluster_->tablet_server(i)->uuid();
+    NO_FATALS(SendNoOp(tablet_id, leader_uuid, dest_uuid,
+                       proxy_uuid != dest_uuid ? optional<string>(proxy_uuid) : boost::none,
+                       MakeOpId(1, 1), /*payload=*/ leader_uuid));
+  }
+}
+
+} // namespace itest
 } // namespace kudu
