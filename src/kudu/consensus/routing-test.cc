@@ -38,10 +38,10 @@ TEST(RoutingTest, TestRoutingTable) {
   for (int i = 0; i < config.peers_size(); i++) {
     auto* peer = config.mutable_peers(i);
     const string& uuid = peer->permanent_uuid();
-    if (uuid == "peer-1") peer->set_proxy_from("peer-0");
-    if (uuid == "peer-3") peer->set_proxy_from("peer-2");
-    if (uuid == "peer-4") peer->set_proxy_from("peer-3");
-    if (uuid == "peer-5") peer->set_proxy_from("peer-3");
+    if (uuid == "peer-1") peer->mutable_attrs()->set_proxy_from("peer-0");
+    if (uuid == "peer-3") peer->mutable_attrs()->set_proxy_from("peer-2");
+    if (uuid == "peer-4") peer->mutable_attrs()->set_proxy_from("peer-3");
+    if (uuid == "peer-5") peer->mutable_attrs()->set_proxy_from("peer-3");
   }
 
   // Specify a leader that has a parent (proxy_from).
