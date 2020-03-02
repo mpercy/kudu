@@ -1977,6 +1977,7 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
           break;
 
         case MODIFY_PEER: {
+          LOG(INFO) << "modifying peer" << peer.ShortDebugString();
           RaftPeerPB* modified_peer;
           RETURN_NOT_OK(GetRaftConfigMember(&new_config, server_uuid, &modified_peer));
           const RaftPeerPB orig_peer(*modified_peer);
@@ -2006,6 +2007,9 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
           }
           if (peer.attrs().has_replace()) {
             modified_peer->mutable_attrs()->set_replace(peer.attrs().replace());
+          }
+          if (peer.attrs().has_proxy_from()) {
+            modified_peer->mutable_attrs()->set_proxy_from(peer.attrs().proxy_from());
           }
           // Ensure that MODIFY_PEER actually modified something.
           if (MessageDifferencer::Equals(orig_peer, *modified_peer)) {

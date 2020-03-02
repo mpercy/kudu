@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <boost/optional/optional.hpp>
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -30,13 +31,22 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/integration-tests/cluster_itest_util.h"
 #include "kudu/integration-tests/external_mini_cluster-itest-base.h"
+#include "kudu/integration-tests/internal_mini_cluster-itest-base.h"
 #include "kudu/integration-tests/mini_cluster_fs_inspector.h"
 #include "kudu/integration-tests/test_workload.h"
-#include "kudu/mini-cluster/external_mini_cluster.h"
+#include "kudu/mini-cluster/internal_mini_cluster.h"
+#include "kudu/tserver/mini_tablet_server.h"
 #include "kudu/rpc/rpc_controller.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
+
+DECLARE_bool(allow_unsafe_replication_factor);
+DECLARE_bool(catalog_manager_wait_for_new_tablets_to_elect_leader);
+DECLARE_bool(enable_leader_failure_detection);
+DECLARE_bool(raft_enable_multi_hop_proxy_routing);
+DECLARE_string(rpc_encryption);
+DECLARE_string(rpc_authentication);
 
 using boost::optional;
 using kudu::consensus::ConsensusRequestPB;
@@ -58,17 +68,17 @@ namespace kudu {
 namespace itest {
 
 // Test Raft consensus proxying behavior.
-class RaftConsensusProxyITest : public ExternalMiniClusterITestBase {
+class RaftConsensusProxyITest : public MiniClusterITestBase {
+ public:
+  RaftConsensusProxyITest() {
+    FLAGS_rpc_encryption = "disabled";
+    FLAGS_rpc_authentication = "disabled";
+    FLAGS_allow_unsafe_replication_factor = true;
+  }
+
  protected:
   // FIXME(mpercy): Temporarily disabling encryption / auth due to DNS issues
   // on my dev box.
-  vector<string> ts_flags_ = { "--enable_leader_failure_detection=false",
-                               "--rpc_encryption=disabled",
-                               "--rpc_authentication=disabled" };
-  vector<string> master_flags_ = { "--catalog_manager_wait_for_new_tablets_to_elect_leader=false",
-                                   "--rpc_encryption=disabled",
-                                   "--rpc_authentication=disabled",
-                                   "--allow_unsafe_replication_factor" };
 
   void SendNoOp(string tablet_id, string src, string dest_uuid,
                 optional<string> proxy_uuid, OpId opid, string payload);
@@ -116,9 +126,11 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderNoRouting) {
   const int kNumReplicas = 2;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
 
-  ts_flags_.push_back("--raft_enable_multi_hop_proxy_routing=false"); // for fake leader
+  FLAGS_raft_enable_multi_hop_proxy_routing = false;
 
-  NO_FATALS(StartCluster(ts_flags_, master_flags_, /*num_tablet_servers=*/ kNumReplicas));
+  NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
+  FLAGS_enable_leader_failure_detection = false;
+  FLAGS_catalog_manager_wait_for_new_tablets_to_elect_leader = false;
 
   // Create the test table.
   TestWorkload workload(cluster_.get());
@@ -162,7 +174,10 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   //
   const int kNumReplicas = 4;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
-  NO_FATALS(StartCluster(ts_flags_, master_flags_, /*num_tablet_servers=*/ kNumReplicas));
+
+  NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
+  FLAGS_enable_leader_failure_detection = false;
+  FLAGS_catalog_manager_wait_for_new_tablets_to_elect_leader = false;
 
   // Create the test table.
   TestWorkload workload(cluster_.get());
@@ -176,7 +191,7 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   const string& tablet_id = tablets[0];
 
   const int kLeaderIndex = 0; // first ts is the leader
-  TServerDetails* leader = ts_map_[cluster_->tablet_server(kLeaderIndex)->uuid()];
+  TServerDetails* leader = ts_map_[cluster_->mini_tablet_server(kLeaderIndex)->uuid()];
   ASSERT_OK(itest::StartElection(leader, tablet_id, kTimeout));
   ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/ 1));
 
@@ -188,27 +203,30 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   ASSERT_EQ(4, new_config.peers_size());
 
   vector<consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB> changes;
-  for (int i = 1; i < kNumReplicas; i++) {
+  for (int i = 2; i < kNumReplicas; i++) {
     consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB change_pb;
-    change_pb.mutable_peer()->set_permanent_uuid(cluster_->tablet_server(i)->uuid());
-    if (i > 1) {
-      change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
-          cluster_->tablet_server(i - 1)->uuid());
-    }
+    change_pb.set_type(consensus::MODIFY_PEER);
+    change_pb.mutable_peer()->set_permanent_uuid(cluster_->mini_tablet_server(i)->uuid());
+    change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
+        cluster_->mini_tablet_server(i - 1)->uuid());
   }
   ASSERT_OK(BulkChangeConfig(leader, tablet_id, changes, kTimeout));
 
   // Now kill the leader, pretend we are the leader, and proxy messages to the
   // non-leaders.
-  string leader_uuid = cluster_->tablet_server(kLeaderIndex)->uuid();
-  string proxy_uuid = cluster_->tablet_server(1)->uuid();
-  cluster_->tablet_server(kLeaderIndex)->Shutdown();
+  string leader_uuid = cluster_->mini_tablet_server(kLeaderIndex)->uuid();
+  string proxy_uuid = cluster_->mini_tablet_server(1)->uuid();
+  cluster_->mini_tablet_server(kLeaderIndex)->Shutdown();
   for (int i = 1; i < kNumReplicas; i++) {
-    string dest_uuid = cluster_->tablet_server(i)->uuid();
+    string dest_uuid = cluster_->mini_tablet_server(i)->uuid();
     NO_FATALS(SendNoOp(tablet_id, leader_uuid, dest_uuid,
                        proxy_uuid != dest_uuid ? optional<string>(proxy_uuid) : boost::none,
                        MakeOpId(1, 1), /*payload=*/ leader_uuid));
   }
+
+  auto follower_map = ts_map_;
+  follower_map.erase(leader_uuid);
+  ASSERT_OK(WaitForServersToAgree(kTimeout, follower_map, tablet_id, /*minimum_index=*/1));
 }
 
 } // namespace itest

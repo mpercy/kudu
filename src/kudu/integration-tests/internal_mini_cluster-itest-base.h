@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "kudu/client/shared_ptr.h"
+#include "kudu/integration-tests/mini_cluster_fs_inspector.h"
 #include "kudu/mini-cluster/internal_mini_cluster.h"
 #include "kudu/util/test_util.h"
 
@@ -46,6 +47,7 @@ class MiniClusterITestBase : public KuduTest {
   void StopCluster();
 
   std::unique_ptr<cluster::InternalMiniCluster> cluster_;
+  std::unique_ptr<itest::MiniClusterFsInspector> inspect_;
   client::sp::shared_ptr<client::KuduClient> client_;
   std::unordered_map<std::string, itest::TServerDetails*> ts_map_;
 };
