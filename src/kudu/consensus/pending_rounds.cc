@@ -67,8 +67,11 @@ Status PendingRounds::CancelPendingTransactions() {
   for (auto txn = pending_txns_.crbegin(); txn != pending_txns_.crend(); ++txn) {
     const scoped_refptr<ConsensusRound>& round = txn->second;
     // We cancel only transactions whose applies have not yet been triggered.
+    // TODO(mpercy): Figure out why this shit is so fucked up and revert this.
+    /*
     LOG_WITH_PREFIX(INFO) << "Aborting transaction as it isn't in flight: "
                           << SecureShortDebugString(*round->replicate_msg());
+                          */
     round->NotifyReplicationFinished(Status::Aborted("Transaction aborted"));
   }
   return Status::OK();
