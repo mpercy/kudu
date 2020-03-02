@@ -1274,8 +1274,8 @@ Status RaftConsensus::CheckLeaderRequestUnlocked(const ConsensusRequestPB* reque
   for (const ReplicateRefPtr& message : deduped_req->messages) {
     s = PendingRounds::CheckOpInSequence(*prev, message->get()->id());
     if (PREDICT_FALSE(!s.ok())) {
-      LOG(ERROR) << "Leader request contained out-of-sequence messages. Status: "
-          << s.ToString() << ". Leader Request: " << SecureShortDebugString(*request);
+      LOG_WITH_PREFIX_UNLOCKED(ERROR) << "Leader request contained out-of-sequence messages. "
+          << "Status: " << s.ToString() << ". Leader Request: " << SecureShortDebugString(*request);
       break;
     }
     prev = &message->get()->id();
@@ -1905,6 +1905,8 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
     // A record of the peers being modified so that we can enforce only one
     // change per peer per request.
     unordered_set<string> peers_modified;
+
+    LOG(INFO) << "Requested config changes: " << req.ShortDebugString();
 
     for (const auto& item : req.config_changes()) {
       if (PREDICT_FALSE(!item.has_type())) {
@@ -3366,6 +3368,8 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
     }
 
   }
+
+  LOG_WITH_PREFIX(INFO) << "Downstream request: " << SecureShortDebugString(downstream_request);
 
   // Asynchronously:
   // Send the request to the remote.

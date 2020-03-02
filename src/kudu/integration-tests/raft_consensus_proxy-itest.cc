@@ -81,11 +81,11 @@ class RaftConsensusProxyITest : public MiniClusterITestBase {
   // on my dev box.
 
   void SendNoOp(string tablet_id, string src, string dest_uuid,
-                optional<string> proxy_uuid, OpId opid, string payload);
+                optional<string> proxy_uuid, OpId opid, OpId preceding_opid, string payload);
 };
 
 void RaftConsensusProxyITest::SendNoOp(string tablet_id, string src_uuid, string dest_uuid,
-                                       optional<string> proxy_uuid, OpId opid, string payload) {
+                                       optional<string> proxy_uuid, OpId opid, OpId preceding_opid, string payload) {
 
   TServerDetails* dest_ts = FindOrDie(ts_map_, dest_uuid);
   TServerDetails* next_ts = dest_ts;
@@ -96,12 +96,13 @@ void RaftConsensusProxyITest::SendNoOp(string tablet_id, string src_uuid, string
   // Construct and send a replicate message to the proxy, via the proxy to the
   // downstream ts.
   ConsensusRequestPB req;
-  req.set_dest_uuid(std::move(dest_uuid));
   req.set_tablet_id(std::move(tablet_id));
+  req.set_dest_uuid(std::move(dest_uuid));
   req.set_caller_uuid(std::move(src_uuid));
   req.set_caller_term(opid.term());
   req.set_all_replicated_index(0);
   req.set_committed_index(0);
+  *req.mutable_preceding_id() = std::move(preceding_opid);
 
   ReplicateMsg* msg = req.mutable_ops()->Add();
   *msg->mutable_id() = std::move(opid);
@@ -157,12 +158,13 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderNoRouting) {
   SCOPED_TRACE(Substitute("downstream ts uuid: $0", downstream_ts->uuid()));
 
   const string kFakeLeaderUuid = "fake-leader";
+  auto preceding_opid = MakeOpId(0, 0);
   auto opid = MakeOpId(1, 1);
 
   NO_FATALS(SendNoOp(tablet_id, kFakeLeaderUuid, proxy_ts->uuid(),
-                     /*proxy_uuid=*/ boost::none, opid, /*payload=*/ kFakeLeaderUuid));
+                     /*proxy_uuid=*/ boost::none, opid, preceding_opid, /*payload=*/ kFakeLeaderUuid));
   NO_FATALS(SendNoOp(tablet_id, kFakeLeaderUuid, downstream_ts->uuid(),
-                     proxy_ts->uuid(), opid, /*payload=*/ kFakeLeaderUuid));
+                     proxy_ts->uuid(), opid, preceding_opid, /*payload=*/ kFakeLeaderUuid));
   ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/1));
 }
 
@@ -202,31 +204,43 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   RaftConfigPB new_config = cstate.committed_config();
   ASSERT_EQ(4, new_config.peers_size());
 
+  LOG(INFO) << "Trying to request changes...";
   vector<consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB> changes;
   for (int i = 2; i < kNumReplicas; i++) {
+    LOG(INFO) << i;
     consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB change_pb;
     change_pb.set_type(consensus::MODIFY_PEER);
     change_pb.mutable_peer()->set_permanent_uuid(cluster_->mini_tablet_server(i)->uuid());
     change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
         cluster_->mini_tablet_server(i - 1)->uuid());
+    changes.emplace_back(std::move(change_pb));
+  }
+  for (const auto& change : changes) {
+    LOG(INFO) << "change: " << change.ShortDebugString();
   }
   ASSERT_OK(BulkChangeConfig(leader, tablet_id, changes, kTimeout));
 
+  LOG(INFO) << "HELLO 1";
+
   // Now kill the leader, pretend we are the leader, and proxy messages to the
   // non-leaders.
+  const int kTerm = 1;
+  int next_index = 3; // 1 after the initial no-op the leader sent.
   string leader_uuid = cluster_->mini_tablet_server(kLeaderIndex)->uuid();
   string proxy_uuid = cluster_->mini_tablet_server(1)->uuid();
   cluster_->mini_tablet_server(kLeaderIndex)->Shutdown();
   for (int i = 1; i < kNumReplicas; i++) {
+    LOG(INFO) << i;
     string dest_uuid = cluster_->mini_tablet_server(i)->uuid();
     NO_FATALS(SendNoOp(tablet_id, leader_uuid, dest_uuid,
                        proxy_uuid != dest_uuid ? optional<string>(proxy_uuid) : boost::none,
-                       MakeOpId(1, 1), /*payload=*/ leader_uuid));
+                       MakeOpId(kTerm, next_index), MakeOpId(kTerm, next_index - 1), /*payload=*/ leader_uuid));
   }
 
   auto follower_map = ts_map_;
   follower_map.erase(leader_uuid);
-  ASSERT_OK(WaitForServersToAgree(kTimeout, follower_map, tablet_id, /*minimum_index=*/1));
+  ASSERT_OK(WaitForServersToAgree(kTimeout, follower_map, tablet_id, /*minimum_index=*/next_index));
+  LOG(INFO) << "SUCCESS HELLO 2";
 }
 
 } // namespace itest
