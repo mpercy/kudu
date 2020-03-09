@@ -3384,7 +3384,7 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
   CHECK(next_peer_pb->has_last_known_addr()) << "no known addr for peer"; // TODO(mpercy): Remove CHECK
 
   // Create a consensus proxy
-  gscoped_ptr<PeerProxy> next_proxy;
+  shared_ptr<PeerProxy> next_proxy;
   CHECK_OK(peer_proxy_factory_->NewProxy(*next_peer_pb, &next_proxy));
 
   // TODO(mpercy): Make the proxy
