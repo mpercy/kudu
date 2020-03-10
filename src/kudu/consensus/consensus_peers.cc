@@ -37,7 +37,9 @@
 #include "kudu/consensus/consensus_queue.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid_util.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/gutil/macros.h"
+#include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/rpc/periodic.h"
@@ -107,6 +109,7 @@ Status Peer::NewRemotePeer(RaftPeerPB peer_pb,
                            string tablet_id,
                            string leader_uuid,
                            PeerMessageQueue* queue,
+                           PeerProxyPool* peer_proxy_pool,
                            ThreadPoolToken* raft_pool_token,
                            shared_ptr<PeerProxy> proxy,
                            shared_ptr<Messenger> messenger,
@@ -116,6 +119,7 @@ Status Peer::NewRemotePeer(RaftPeerPB peer_pb,
                                      std::move(tablet_id),
                                      std::move(leader_uuid),
                                      queue,
+                                     peer_proxy_pool,
                                      raft_pool_token,
                                      std::move(proxy),
                                      std::move(messenger)));
@@ -128,6 +132,7 @@ Peer::Peer(RaftPeerPB peer_pb,
            string tablet_id,
            string leader_uuid,
            PeerMessageQueue* queue,
+           PeerProxyPool* peer_proxy_pool,
            ThreadPoolToken* raft_pool_token,
            shared_ptr<PeerProxy> proxy,
            shared_ptr<Messenger> messenger)
@@ -136,6 +141,7 @@ Peer::Peer(RaftPeerPB peer_pb,
       peer_pb_(std::move(peer_pb)),
       proxy_(std::move(proxy)),
       queue_(queue),
+      peer_proxy_pool_(peer_proxy_pool),
       failed_attempts_(0),
       messenger_(std::move(messenger)),
       raft_pool_token_(raft_pool_token) {
@@ -281,10 +287,22 @@ void Peer::SendNextRequest(bool even_if_queue_empty) {
   // Capture a shared_ptr reference into the RPC callback so that we're guaranteed
   // that this object outlives the RPC.
   shared_ptr<Peer> s_this = shared_from_this();
-  proxy_->UpdateAsync(request_, &response_, &controller_,
-                      [s_this]() {
-                        s_this->ProcessResponse();
-                      });
+
+  // TODO(mpercy): Instead of going through proxy_, use an actual proxy if needed.
+  // Or, simply calculate the proxy_ as the proxy_ we're supposed to go through
+  // when it's instantiated. So what happens when we reconfigure Kudu?
+
+  string next_hop_uuid = queue_->GetNextRoutingHopFromLeader(peer_pb().permanent_uuid());
+
+  shared_ptr<PeerProxy> next_hop_proxy = peer_proxy_pool_->Get(next_hop_uuid);
+  if (!next_hop_proxy) {
+    LOG(FATAL) << "TODO(mpercy): handle this error condition";
+  }
+
+  next_hop_proxy->UpdateAsync(request_, &response_, &controller_,
+                              [s_this]() {
+                                s_this->ProcessResponse();
+                              });
 }
 
 void Peer::StartElection() {
@@ -506,6 +524,21 @@ Peer::~Peer() {
 
   // We don't own the ops (the queue does).
   request_.mutable_ops()->ExtractSubrange(0, request_.ops_size(), nullptr);
+}
+
+shared_ptr<PeerProxy> PeerProxyPool::Get(const string& uuid) const {
+  shared_lock<rw_spinlock> l(lock_.get_lock());
+  return FindWithDefault(peer_proxy_map_, uuid, std::shared_ptr<PeerProxy>());
+}
+
+void PeerProxyPool::Put(const string& uuid, shared_ptr<PeerProxy> proxy) {
+  std::lock_guard<percpu_rwlock> l(lock_);
+  peer_proxy_map_[uuid] = std::move(proxy);
+}
+
+void PeerProxyPool::Clear() {
+  std::lock_guard<percpu_rwlock> l(lock_);
+  peer_proxy_map_.clear();
 }
 
 RpcPeerProxy::RpcPeerProxy(HostPort hostport,

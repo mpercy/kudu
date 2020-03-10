@@ -33,6 +33,7 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/ref_counted_replicate.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/gutil/gscoped_ptr.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/threading/thread_collision_warner.h"
@@ -369,6 +370,10 @@ class PeerMessageQueue {
   void BeginWatchForSuccessor(const boost::optional<std::string>& successor_uuid);
   void EndWatchForSuccessor();
 
+  // Get the UUID of the next routing hop from the local node.
+  // Only valid if the current node is a leader.
+  std::string GetNextRoutingHopFromLeader(const std::string& dest_uuid) const;
+
   // TODO(mpercy): It's probably not safe in general to access a queue's log
   // cache via bare pointer, since (IIRC) a queue will be reconstructed
   // transitioning to/from leader. Check this.
@@ -587,6 +592,8 @@ class PeerMessageQueue {
   Metrics metrics_;
 
   TimeManager* time_manager_;
+
+  RoutingTable routing_table_;
 };
 
 // The interface between RaftConsensus and the PeerMessageQueue.

@@ -144,8 +144,15 @@ DEFINE_bool(raft_enable_multi_hop_proxy_routing, true,
 TAG_FLAG(raft_enable_multi_hop_proxy_routing, advanced);
 TAG_FLAG(raft_enable_multi_hop_proxy_routing, runtime);
 
+DEFINE_int32(raft_log_cache_proxy_wait_time_ms, 500,
+             "Maximum wait time for proxied messages to wait for events to "
+             "appear in the local log cache");
+TAG_FLAG(raft_log_cache_proxy_wait_time_ms, advanced);
+TAG_FLAG(raft_log_cache_proxy_wait_time_ms, runtime);
+
 DECLARE_int32(memory_limit_warn_threshold_percentage);
 DECLARE_int32(consensus_max_batch_size_bytes); // defined in consensus_queue (expose as method?)
+DECLARE_int32(consensus_rpc_timeout_ms);
 
 // Metrics
 // ---------
@@ -3228,16 +3235,48 @@ bool RaftConsensus::IsProxyRequest(const ConsensusRequestPB* request) const {
   return !request->proxy_dest_uuid().empty();
 }
 
+// Set an error and respond.
+// Stolen (mostly) from tablet_service.cc
+static void SetupErrorAndRespond(const Status& s,
+                                 TabletServerErrorPB::Code code,
+                                 ConsensusResponsePB* response,
+                                 rpc::RpcContext* context) {
+  // Generic "service unavailable" errors will cause the client to retry later.
+  if (s.IsServiceUnavailable() &&
+      (code == TabletServerErrorPB::UNKNOWN_ERROR ||
+       code == TabletServerErrorPB::THROTTLED)) {
+    context->RespondRpcFailure(kudu::rpc::ErrorStatusPB::ERROR_SERVER_TOO_BUSY, s);
+    return;
+  }
+
+  StatusToPB(s, response->mutable_error()->mutable_status());
+  response->mutable_error()->set_code(code);
+  context->RespondNoCache();
+}
+
+// Respond with an error and return if 's' is not OK.
+#define RET_RESPOND_ERROR_NOT_OK(s) \
+  do { \
+    const kudu::Status& _s = (s); \
+    if (PREDICT_FALSE(!_s.ok())) { \
+      SetupErrorAndRespond(_s, TabletServerErrorPB::UNKNOWN_ERROR, response, context); \
+      return; \
+    } \
+  } while (0)
+
 void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
                                        ConsensusResponsePB* response,
                                        rpc::RpcContext* context) {
+  MonoDelta wal_wait_timeout = MonoDelta::FromMilliseconds(FLAGS_raft_log_cache_proxy_wait_time_ms);
+  MonoTime wal_wait_deadline = MonoTime::Now() + wal_wait_timeout;
+
   RaftConfigPB active_config;
   string leader_uuid;
   {
     // Snapshot the active Raft config so we know how to route proxied messages.
     ThreadRestrictions::AssertWaitAllowed();
     LockGuard l(lock_);
-    CHECK_OK(CheckRunningUnlocked()); // TODO(mpercy): Error instead of CHECK
+    RET_RESPOND_ERROR_NOT_OK(CheckRunningUnlocked());
     active_config = cmeta_->ActiveConfig();
     leader_uuid = cmeta_->leader_uuid();
   }
@@ -3254,11 +3293,12 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
 
   // Validate the request.
   if (request->proxy_dest_uuid() != peer_uuid()) {
-    // TODO(mpercy): Use the same error type as the usual "bad destination" error.
-    LOG_WITH_PREFIX(WARNING) << "Wrong proxy dest UUID "
-                             << request->proxy_dest_uuid() << ": "
-                             << request->ShortDebugString();
-    context->RespondFailure(Status::InvalidArgument("Bad proxy dest?"));
+    Status s = Status::InvalidArgument(Substitute("Wrong proxy destination UUID requested. "
+                                                  "Local UUID: $1. Requested UUID: $2",
+                                                  peer_uuid(), request->proxy_dest_uuid()));
+    LOG_WITH_PREFIX(WARNING) << s.ToString() << ": from " << context->requestor_string()
+                 << ": " << SecureShortDebugString(*request);
+    SetupErrorAndRespond(s, TabletServerErrorPB::WRONG_SERVER_UUID, response, context);
     return;
   }
   if (request->dest_uuid() == peer_uuid()) {
@@ -3268,9 +3308,6 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
     context->RespondFailure(Status::InvalidArgument("proxy and desination must be different"));
     return;
   }
-
-
-  // TODO(mpercy): Should we validate that everyone involved is in the active config?
 
   // Construct the downstream request; copy the relevant fields from the
   // proxied request.
@@ -3310,7 +3347,7 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
       context->RespondFailure(Status::InvalidArgument("unknown leader: failed to route message"));
       return;
     }
-    RoutingTable routing_table; // TODO(mpercy): Cache me.
+    RoutingTable routing_table; // TODO(mpercy): Cache routing table between requests; it's expensive to calculate.
     CHECK_OK(routing_table.Init(active_config, leader_uuid));
     next_uuid = routing_table.NextHop(peer_uuid(), request->dest_uuid());
   }
@@ -3325,52 +3362,92 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
     prevent_ops_deletion.cancel(); // The ops we copy here are not pre-allocated.
   } else {
 
-    // Reconstitute from local cache.
-    // TODO(mpercy): Factor this out into its own method.
+    // Reconstitute proxied events from the local cache.
+    // If the cache does not have all events, we retry up until the specified
+    // retry timeout.
+    // TODO(mpercy): Switch this from polling to event-triggered.
 
-    // We assume and enforce that a single request is composed of a range of ops.
-    int num_ops = 0;
-    int64_t first_op_index = -1;
-
-    // TODO(mpercy): Return errors instead of crashing below.
-    int64_t max_batch_size = FLAGS_consensus_max_batch_size_bytes - request->ByteSizeLong();
-    for (int i = 0; i < request->ops_size(); i++) {
-      auto& msg = request->ops(i);
-      CHECK_EQ(PROXY_OP, msg.op_type());
-      if (num_ops == 0) {
-        first_op_index = msg.id().index();
-      } else {
-        CHECK_EQ(first_op_index + num_ops, msg.id().index());
-      }
-      num_ops++;
-    }
-    // Now we know that all ops we are reconstituting are consecutive.
-
-    // TODO(mpercy): Check whether we have the event in our LogCache yet. If not,
-    // wait and retry, or subscribe to the event being available. Most likely we
-    // should try be simple / greedy and wait until we have all events in the
-    // cache? Or we could be aggressive and fill what we can?
-
-    OpId preceding_id;
     vector<ReplicateRefPtr> messages;
-    // TODO(mpercy): Add an API for ReadOps() to take number of ops we want,
-    // instead of the max batch size.
-    if (num_ops > 0) {
-      // TODO(mpercy): Return an error on failure instead of a CHECK!
-      CHECK_OK(queue_->log_cache()->ReadOps(first_op_index - 1,
-                                            max_batch_size,
-                                            &messages,
-                                            &preceding_id));
+    do {
+
+      // We assume and enforce that a single request is composed of a range of ops.
+      int64_t first_op_index = -1;
+
+      int64_t max_batch_size = FLAGS_consensus_max_batch_size_bytes - request->ByteSizeLong();
+      for (int i = 0; i < request->ops_size(); i++) {
+        auto& msg = request->ops(i);
+        if (PREDICT_FALSE(msg.op_type() != PROXY_OP)) {
+          RET_RESPOND_ERROR_NOT_OK(Status::InvalidArgument(Substitute(
+              "proxy expected PROXY_OP but received opid {} of type {}",
+              OpIdToString(msg.id()),
+              OperationType_Name(msg.op_type()))));
+        }
+        if (i == 0) {
+          first_op_index = msg.id().index();
+        } else {
+          // TODO(mpercy): It would be nice not to require consecutive indexes in the batch.
+          // We should see if we can support it without a big perf penalty in IOPS.
+          if (PREDICT_FALSE(msg.id().index() != first_op_index + i)) {
+            RET_RESPOND_ERROR_NOT_OK(Status::InvalidArgument(Substitute(
+                "proxy requires consecutive indexes in batch, but received {} after index {}",
+                OpIdToString(msg.id()),
+                first_op_index + i - 1)));
+          }
+        }
+      }
+      // Now we know that all ops we are reconstituting are consecutive.
+
+      // TODO(mpercy): Check whether we have the event in our LogCache yet. If not,
+      // wait and retry, or subscribe to the event being available. Most likely we
+      // should try be simple / greedy and wait until we have all events in the
+      // cache? Or we could be aggressive and fill what we can?
+
+      OpId preceding_id;
+      // TODO(mpercy): Add an API for ReadOps() to take number of ops we want,
+      // instead of the max batch size.
+      if (request->ops_size() > 0) {
+        RET_RESPOND_ERROR_NOT_OK(queue_->log_cache()->ReadOps(first_op_index - 1,
+                                                              max_batch_size,
+                                                              &messages,
+                                                              &preceding_id));
+      }
+
+      if (messages.size() >= request->ops_size()) {
+        break;
+      }
+
+      if (MonoTime::Now() > wal_wait_deadline) {
+        // TODO(mpercy): Increment a counter for how often we time out.
+        break;
+      }
+
+      // Sleep and retry.
+      SleepFor(MonoDelta::FromMilliseconds(5));
+
+    } while (true);
+
+    if (request->ops_size() > 0 && messages.size() == 0) {
+      // We got nothing from the cache, go back into hiding until the expected
+      // timeout when we turn into a heartbeat. TODO(mpercy): Increment a
+      // counter for how often we degrade to a heartbeat.
+      LOG_WITH_PREFIX(WARNING) << "no relevant events found in the log cache";
     }
 
-    // Reconstitute the proxied ops.
+    // Reconstitute the proxied ops. We silently tolerate proxying a subset of
+    // the requested batch.
     for (int i = 0; i < request->ops_size() && i < messages.size(); i++) {
-      // Ensure that the OpIds match.
-      // TODO(mpercy): Return an error instead of a CHECK!
-      CHECK(OpIdEquals(request->ops(i).id(), messages[i]->get()->id()));
+      // Ensure that the OpIds match. We don't expect a mismatch to ever
+      // happen, so we log an error locally before reponding to the caller.
+      if (!OpIdEquals(request->ops(i).id(), messages[i]->get()->id())) {
+          Status s = Status::IllegalState(Substitute(
+              "log cache returned non-consecutive OpId indexes: expected {}, found {}",
+              OpIdToString(request->ops(i).id()),
+              OpIdToString(messages[i]->get()->id())));
+          LOG_WITH_PREFIX(ERROR) << s.ToString();
+          RET_RESPOND_ERROR_NOT_OK(s);
+      }
       downstream_request.mutable_ops()->AddAllocated(messages[i]->get());
     }
-
   }
 
   VLOG_WITH_PREFIX(3) << "Downstream proxy request: " << SecureShortDebugString(downstream_request);
@@ -3380,34 +3457,42 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
   //
   // Find the address of the remote given our local config.
   RaftPeerPB* next_peer_pb;
-  CHECK_OK(GetRaftConfigMember(&active_config, next_uuid, &next_peer_pb)); // TODO(mpercy): Remove CHECK
-  CHECK(next_peer_pb->has_last_known_addr()) << "no known addr for peer"; // TODO(mpercy): Remove CHECK
+  Status s = GetRaftConfigMember(&active_config, next_uuid, &next_peer_pb);
+  if (PREDICT_FALSE(!s.ok())) {
+    RET_RESPOND_ERROR_NOT_OK(s.CloneAndPrepend(Substitute(
+        "unable to proxy to peer {} because it is not in the active config: {}",
+        next_uuid,
+        SecureShortDebugString(active_config))));
+  }
+  if (!next_peer_pb->has_last_known_addr()) {
+    s = Status::IllegalState("no known address for peer", next_uuid);
+    LOG_WITH_PREFIX(ERROR) << s.ToString();
+    RET_RESPOND_ERROR_NOT_OK(s);
+  }
 
-  // Create a consensus proxy
+  // TODO(mpercy): Cache this proxy object (although they are lightweight).
   shared_ptr<PeerProxy> next_proxy;
-  CHECK_OK(peer_proxy_factory_->NewProxy(*next_peer_pb, &next_proxy));
+  RET_RESPOND_ERROR_NOT_OK(peer_proxy_factory_->NewProxy(*next_peer_pb, &next_proxy));
 
-  // TODO(mpercy): Make the proxy
   ConsensusResponsePB downstream_response;
   rpc::RpcController controller;
+  controller.set_timeout(
+      MonoDelta::FromMilliseconds(FLAGS_consensus_rpc_timeout_ms));
 
   // Here, we turn an async API into a blocking one with a CountdownLatch.
-  // TODO(mpercy): Don't be so shady.
+  // TODO(mpercy): Use an async approach instead.
   CountDownLatch latch(/*count=*/1);
   rpc::ResponseCallback callback = [&latch] { latch.CountDown(); };
   next_proxy->UpdateAsync(downstream_request, &downstream_response, &controller, callback);
-  latch.Wait(); // TODO(mpercy): Wait with a timeout.
+  latch.Wait();
+  if (PREDICT_FALSE(!controller.status().ok())) {
+    RET_RESPOND_ERROR_NOT_OK(controller.status().CloneAndPrepend(
+        Substitute("Error proxying request from {} to {}",
+                   SecureShortDebugString(local_peer_pb_),
+                   SecureShortDebugString(*next_peer_pb))));
+  }
 
-  // Once we reach this point, our result is in 'controller' and
-  // 'downstream_response'. We need to marshall an appropriate response into
-  // 'response' and then respond via 'context'.
-  CHECK_OK(controller.status()); // TODO handle RPC remote errors
-
-  // We just fully proxy what we got.
-  // TODO(mpercy): Do we need to transform anything?
-  // Also, if we have a proxying error, should we try to proxy back information
-  // about the node at which the error occurred other than a text string in a
-  // status message?
+  // Proxy the response back to the caller.
   if (downstream_response.has_responder_uuid()) {
     response->set_responder_uuid(downstream_response.responder_uuid());
   }
