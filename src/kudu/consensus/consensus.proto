@@ -593,6 +593,22 @@ message UnsafeChangeConfigResponsePB {
   optional tserver.TabletServerErrorPB error = 1;
 }
 
+message ChangeProxyRoutingRequestPB {
+  // UUID of server this request is addressed to.
+  optional bytes dest_uuid = 1;
+  optional bytes tablet_id = 2;
+
+  // Sender identification, it could be a static string as well.
+  optional bytes caller_id = 3;
+
+  // The new proxy topology to use.
+  optional ProxyGraphPB new_config = 4;
+}
+
+message ChangeProxyRoutingResponsePB {
+  optional tserver.TabletServerErrorPB error = 1;
+}
+
 // A Raft implementation.
 service ConsensusService {
   option (kudu.rpc.default_authz_method) = "AuthorizeServiceUser";
@@ -617,6 +633,9 @@ service ConsensusService {
 
   // Implements unsafe config change operation for manual recovery use cases.
   rpc UnsafeChangeConfig(UnsafeChangeConfigRequestPB) returns (UnsafeChangeConfigResponsePB);
+
+  // Change the routing graph that defines how requests are proxied.
+  rpc ChangeProxyRouting(ChangeProxyRoutingRequestPB) returns (ChangeProxyRoutingResponsePB);
 
   rpc GetNodeInstance(GetNodeInstanceRequestPB) returns (GetNodeInstanceResponsePB);
 

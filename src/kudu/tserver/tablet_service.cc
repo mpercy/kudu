@@ -1482,6 +1482,34 @@ void ConsensusServiceImpl::UnsafeChangeConfig(const UnsafeChangeConfigRequestPB*
   context->RespondSuccess();
 }
 
+void ConsensusServiceImpl::ChangeProxyRouting(const consensus::ChangeProxyRoutingRequestPB* req,
+                                              consensus::ChangeProxyRoutingResponsePB* resp,
+                                              rpc::RpcContext* context) {
+  LOG(INFO) << "Received ChangeProxyRouting RPC: " << SecureDebugString(*req)
+            << " from " << context->requestor_string();
+  if (!CheckUuidMatchOrRespond(tablet_manager_, "ChangeProxyRouting", req, resp, context)) {
+    return;
+  }
+  scoped_refptr<TabletReplica> replica;
+  if (!LookupRunningTabletReplicaOrRespond(tablet_manager_, req->tablet_id(), resp, context,
+                                           &replica)) {
+    return;
+  }
+
+  shared_ptr<RaftConsensus> consensus;
+  if (!GetConsensusOrRespond(replica, resp, context, &consensus)) {
+    return;
+  }
+  boost::optional<TabletServerErrorPB::Code> error_code;
+  const Status s = consensus->ChangeProxyRouting(*req, &error_code);
+  if (PREDICT_FALSE(!s.ok())) {
+    HandleErrorResponse(req, resp, context, error_code, s);
+    return;
+  }
+  context->RespondSuccess();
+}
+
+
 void ConsensusServiceImpl::GetNodeInstance(const GetNodeInstanceRequestPB* req,
                                            GetNodeInstanceResponsePB* resp,
                                            rpc::RpcContext* context) {

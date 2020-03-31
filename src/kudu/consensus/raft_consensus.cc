@@ -2201,6 +2201,12 @@ Status RaftConsensus::UnsafeChangeConfig(
   });
 }
 
+Status RaftConsensus::ChangeProxyRouting(const ChangeProxyRoutingRequestPB& req,
+                                         optional<TabletServerErrorPB::Code>* error_code) {
+  // TODO: implement me
+  return Status::OK();
+}
+
 void RaftConsensus::Stop() {
   TRACE_EVENT2("consensus", "RaftConsensus::Shutdown",
                "peer", peer_uuid(),

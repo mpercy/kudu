@@ -314,6 +314,10 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   Status UnsafeChangeConfig(const UnsafeChangeConfigRequestPB& req,
                             boost::optional<tserver::TabletServerErrorPB::Code>* error_code);
 
+  // TODO(mpercy): doc me
+  Status ChangeProxyRouting(const ChangeProxyRoutingRequestPB& req,
+                            boost::optional<tserver::TabletServerErrorPB::Code>* error_code);
+
   // Returns the last OpId (either received or committed, depending on the
   // 'type' argument) that the Consensus implementation knows about.
   // Returns boost::none if RaftConsensus was not properly initialized.
