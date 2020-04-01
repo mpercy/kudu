@@ -237,7 +237,9 @@ void PeerMessageQueue::SetLeaderMode(int64_t committed_index,
     entry.second->last_communication_time = now;
   }
   time_manager_->SetLeaderMode();
-  CHECK_OK(routing_table_.Init(active_config, local_peer_pb_.permanent_uuid())); // FIXME: CHECK?
+  // TODO(mpercy): Figure out how to make the proxy graph durable.
+  ProxyGraphPB proxy_graph;
+  CHECK_OK(routing_table_.Init(active_config, proxy_graph, local_peer_pb_.permanent_uuid())); // FIXME: CHECK?
 }
 
 void PeerMessageQueue::SetNonLeaderMode(const RaftConfigPB& active_config) {

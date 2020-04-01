@@ -20,6 +20,8 @@
 #include <memory>
 #include <string>
 
+#include <boost/optional/optional.hpp>
+
 #include "kudu/consensus/metadata.pb.h"
 
 namespace kudu {
@@ -61,7 +63,9 @@ namespace consensus {
 class RoutingTable {
  public:
   // Initialize the routing table. Safe to call multiple times.
-  Status Init(const RaftConfigPB& config, const std::string& leader_uuid);
+  Status Init(const RaftConfigPB& raft_config,
+              const ProxyGraphPB& proxy_graph,
+              const std::string& leader_uuid);
 
   // Return the UUID of the next hop, given the UUIDs of the current source
   // and the ultimate destination.
@@ -74,9 +78,17 @@ class RoutingTable {
   // A node representing a raft peer in a hierarchy with associated routing
   // rules for proxied messages.
   struct Node {
-    explicit Node(RaftPeerPB peer_pb) : peer_pb(peer_pb) {}
-    const std::string& id() const { return peer_pb.permanent_uuid(); }
+    Node(RaftPeerPB peer_pb, boost::optional<ProxyEdgePB> proxy_edge)
+        : peer_pb(peer_pb),
+          proxy_edge(proxy_edge) {
+    }
+
+    const std::string& id() const {
+      return peer_pb.permanent_uuid();
+    }
+
     RaftPeerPB peer_pb;
+    boost::optional<ProxyEdgePB> proxy_edge;
     Node* parent = nullptr;
     // children: child_uuid -> child
     std::unordered_map<std::string, std::unique_ptr<Node>> children;
@@ -87,7 +99,8 @@ class RoutingTable {
   // Construct a forest of trees that represent the proxy relationships,
   // with non-proxied nodes at the root of each tree.
   Status ConstructForest(
-      const RaftConfigPB& config,
+      const RaftConfigPB& raft_config,
+      const ProxyGraphPB& proxy_graph,
       std::unordered_map<std::string, Node*>* index,
       std::unordered_map<std::string, std::unique_ptr<Node>>* trees);
 

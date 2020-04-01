@@ -33,22 +33,25 @@ using std::unordered_map;
 namespace kudu {
 namespace consensus {
 
+static void AddEdge(ProxyGraphPB* proxy_graph, string peer, string upstream_uuid) {
+  ProxyEdgePB* edge = proxy_graph->add_proxy_edges();
+  edge->set_peer_uuid(std::move(peer));
+  edge->set_proxy_from_uuid(std::move(upstream_uuid));
+}
+
 TEST(RoutingTest, TestRoutingTable) {
-  RaftConfigPB config = BuildRaftConfigPBForTests(/*num_voters=*/6);
-  for (int i = 0; i < config.peers_size(); i++) {
-    auto* peer = config.mutable_peers(i);
-    const string& uuid = peer->permanent_uuid();
-    if (uuid == "peer-1") peer->mutable_attrs()->set_proxy_from("peer-0");
-    if (uuid == "peer-3") peer->mutable_attrs()->set_proxy_from("peer-2");
-    if (uuid == "peer-4") peer->mutable_attrs()->set_proxy_from("peer-3");
-    if (uuid == "peer-5") peer->mutable_attrs()->set_proxy_from("peer-3");
-  }
+  RaftConfigPB raft_config = BuildRaftConfigPBForTests(/*num_voters=*/6);
+  ProxyGraphPB proxy_graph;
+  AddEdge(&proxy_graph, /*to=*/"peer-1", /*proxy_from=*/"peer-0");
+  AddEdge(&proxy_graph, /*to=*/"peer-3", /*proxy_from=*/"peer-2");
+  AddEdge(&proxy_graph, /*to=*/"peer-4", /*proxy_from=*/"peer-3");
+  AddEdge(&proxy_graph, /*to=*/"peer-5", /*proxy_from=*/"peer-3");
 
   // Specify a leader that has a parent (proxy_from).
   string leader_uuid = "peer-3";
 
   RoutingTable route;
-  ASSERT_OK(route.Init(config, leader_uuid));
+  ASSERT_OK(route.Init(raft_config, proxy_graph, leader_uuid));
 
   ASSERT_EQ("peer-5", route.NextHop("peer-3", "peer-5"));
   ASSERT_EQ("peer-0", route.NextHop("peer-3", "peer-1"));

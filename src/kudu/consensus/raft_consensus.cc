@@ -3353,8 +3353,9 @@ void RaftConsensus::HandleProxyRequest(const ConsensusRequestPB* request,
       context->RespondFailure(Status::InvalidArgument("unknown leader: failed to route message"));
       return;
     }
+    ProxyGraphPB proxy_graph; // TODO(mpercy): Make this durable.
     RoutingTable routing_table; // TODO(mpercy): Cache routing table between requests; it's expensive to calculate.
-    CHECK_OK(routing_table.Init(active_config, leader_uuid));
+    CHECK_OK(routing_table.Init(active_config, proxy_graph, leader_uuid));
     next_uuid = routing_table.NextHop(peer_uuid(), request->dest_uuid());
   }
 

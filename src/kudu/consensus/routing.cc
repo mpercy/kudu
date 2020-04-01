@@ -30,12 +30,13 @@ using std::vector;
 namespace kudu {
 namespace consensus {
 
-Status RoutingTable::Init(const RaftConfigPB& config,
+Status RoutingTable::Init(const RaftConfigPB& raft_config,
+                          const ProxyGraphPB& proxy_graph,
                           const std::string& leader_uuid) {
   unordered_map<string, Node*> index;
   unordered_map<string, unique_ptr<Node>> trees;
 
-  RETURN_NOT_OK(ConstructForest(config, &index, &trees));
+  RETURN_NOT_OK(ConstructForest(raft_config, proxy_graph, &index, &trees));
   RETURN_NOT_OK(MergeTrees(leader_uuid, index, &trees));
   ConstructNextHopIndicesRec(trees.begin()->second.get());
 
@@ -46,13 +47,25 @@ Status RoutingTable::Init(const RaftConfigPB& config,
 }
 
 Status RoutingTable::ConstructForest(
-    const RaftConfigPB& config,
+    const RaftConfigPB& raft_config,
+    const ProxyGraphPB& proxy_graph,
     std::unordered_map<std::string, Node*>* index,
     std::unordered_map<std::string, std::unique_ptr<Node>>* trees) {
 
+  // Key the graph by peer_uuid.
+  unordered_map<string, ProxyEdgePB> dest_to_edge;
+  for (const auto& edge : proxy_graph.proxy_edges()) {
+    DCHECK(!ContainsKey(dest_to_edge, edge.peer_uuid())) << edge.peer_uuid();
+    InsertOrDie(&dest_to_edge, edge.peer_uuid(), edge);
+  }
+
   // Construct the peers.
-  for (const RaftPeerPB& peer : config.peers()) {
-    unique_ptr<Node> hop(new Node(peer));
+  for (const RaftPeerPB& peer : raft_config.peers()) {
+    boost::optional<ProxyEdgePB> opt_edge;
+    const ProxyEdgePB* edge = FindOrNull(dest_to_edge, peer.permanent_uuid());
+    if (edge) opt_edge = *edge;
+
+    unique_ptr<Node> hop(new Node(peer, opt_edge));
     index->emplace(peer.permanent_uuid(), hop.get());
     auto result = trees->emplace(peer.permanent_uuid(), std::move(hop));
     if (!result.second) {
@@ -61,14 +74,15 @@ Status RoutingTable::ConstructForest(
     }
   }
   // Organize the peers into a forest of trees.
-  for (const RaftPeerPB& peer : config.peers()) {
-    if (peer.attrs().proxy_from().empty()) {
+  for (const RaftPeerPB& peer : raft_config.peers()) {
+    const ProxyEdgePB* edge = FindOrNull(dest_to_edge, peer.permanent_uuid());
+    if (!edge || edge->proxy_from_uuid().empty()) {
       continue;
     }
 
     // Node has a parent so we must link them and assign ownership to the
     // parent.
-    const string& parent_uuid = peer.attrs().proxy_from();
+    const string& parent_uuid = edge->proxy_from_uuid();
     Node* parent_ptr = FindWithDefault(*index, parent_uuid, nullptr);
     if (!parent_ptr) {
       return Status::InvalidArgument("invalid config: cannot find proxy",
