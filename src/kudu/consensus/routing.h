@@ -23,6 +23,8 @@
 #include <boost/optional/optional.hpp>
 
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/fs/fs_manager.h"
+#include "kudu/util/rwc_lock.h"
 
 namespace kudu {
 
@@ -118,6 +120,69 @@ class RoutingTable {
 
   std::unique_ptr<Node> topology_root_;
   std::unordered_map<std::string, Node*> index_;
+};
+
+// Thread-safe and durable metadata layer on top of RoutingTable.
+// Ensures that a single instance of RoutingTable is active at any given moment.
+//
+// TODO(mpercy): Think about the case where consensus has just been initialized
+// and we don't know the leader locally yet. In this case, how should we route
+// proxied messages? We have at least two options:
+//
+// 1) Simply route messages "directly".
+//
+// 2) The receipt of a proxied message triggers an update of the leader, so we
+//    block on updating the routing table before asking for a routing decision.
+//    Is this an invariant we can always rely on?
+//
+// Maybe we can support both of the above. Nominally, we route messages for
+// unknown senders / receivers directly, but in practice we always update the
+// routing table when we get a new message, to avoid flip / flopping in our
+// routing decisions.
+//
+class DurableRoutingTable {
+ public:
+  // Initialize for the first time and write to disk.
+  static Status Create(FsManager* fs_manager,
+                       std::string tablet_id,
+                       ProxyGraphPB proxy_graph,
+                       RaftConfigPB raft_config,
+                       std::string leader_uuid);
+
+  // Read from disk.
+  static Status Load(FsManager* fs_manager,
+                     std::string tablet_id,
+                     RaftConfigPB raft_config
+                     /* TODO(mpercy): we don't know leader uuid at startup! */);
+
+  // Called when the config or the leader changes.
+  Status UpdateRaftConfig(RaftConfigPB raft_config, std::string leader_uuid);
+
+  // Called when the proxy graph changes.
+  Status UpdateProxyGraph(ProxyGraphPB proxy_graph);
+
+  std::string NextHop(const std::string& src_uuid,
+                      const std::string& dest_uuid) const;
+
+ private:
+  DurableRoutingTable(FsManager* fs_manager,
+                      std::string tablet_id,
+                      RoutingTable routing_table,
+                      ProxyGraphPB proxy_graph,
+                      RaftConfigPB raft_config,
+                      std::string leader_uuid);
+
+  // We flush a new ProxyGraphPB to disk before committing the updated version to memory.
+  Status Flush() const;
+
+  FsManager* fs_manager_;
+  const std::string tablet_id_;
+
+  mutable RWCLock lock_; // read-write-commit lock protecting the below fields
+  RoutingTable routing_table_;
+  ProxyGraphPB proxy_graph_;
+  RaftConfigPB raft_config_;
+  std::string leader_uuid_;
 };
 
 }  // namespace consensus

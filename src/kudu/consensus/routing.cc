@@ -18,10 +18,15 @@
 #include "kudu/consensus/routing.h"
 
 #include <glog/logging.h>
+#include <google/protobuf/util/message_differencer.h>
 
+#include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/util/locks.h"
+#include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/status.h"
 
+using google::protobuf::util::MessageDifferencer;
 using std::string;
 using std::unique_ptr;
 using std::unordered_map;
@@ -160,6 +165,7 @@ string RoutingTable::NextHop(const string& src_uuid,
   Node* src = FindWithDefault(index_, src_uuid, nullptr);
   Node* dest = FindWithDefault(index_, dest_uuid, nullptr);
   if (!src || !dest) return nullptr; // Does not exist.
+  // TODO(mpercy): instead of returning nullptr, return boost::none.
 
   // Search children.
   string* next_uuid = FindOrNull(src->routes, dest_uuid);
@@ -170,6 +176,69 @@ string RoutingTable::NextHop(const string& src_uuid,
   // If we can't route via a child, route via a parent.
   DCHECK(src->parent);
   return src->parent->id();
+}
+
+Status DurableRoutingTable::UpdateRaftConfig(RaftConfigPB raft_config, string leader_uuid) {
+  RaftPeerPB* peer_pb;
+  // Will return an error if 'leader_uuid' is not a member of the config.
+  RETURN_NOT_OK(GetRaftConfigMember(&raft_config, leader_uuid, &peer_pb));
+
+  // Take the write lock (does not block readers) and do the slow stuff here.
+  lock_.WriteLock();
+  auto release_write_lock = MakeScopedCleanup([&] { lock_.WriteUnlock(); });
+
+  // Rebuild the routing table.
+  RoutingTable routing_table;
+  RETURN_NOT_OK(routing_table.Init(raft_config, proxy_graph_, leader_uuid));
+
+  // Upgrade to an exclusive commit lock and make atomic changes here.
+  lock_.UpgradeToCommitLock();
+  release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
+  auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
+
+  routing_table_ = std::move(routing_table);
+  raft_config_ = std::move(raft_config);
+  leader_uuid_ = std::move(leader_uuid);
+
+  return Status::OK();
+}
+
+Status DurableRoutingTable::UpdateProxyGraph(ProxyGraphPB proxy_graph) {
+  // Take the write lock (does not block readers) and do the slow stuff here.
+  lock_.WriteLock();
+  auto release_write_lock = MakeScopedCleanup([&] { lock_.WriteUnlock(); });
+
+  // Rebuild the routing table.
+  RoutingTable routing_table;
+  RETURN_NOT_OK(routing_table.Init(raft_config_, proxy_graph, leader_uuid_));
+
+  // Only flush the proxy graph protobuf to disk when it changes.
+  if (!MessageDifferencer::Equals(proxy_graph, proxy_graph_)) {
+    RETURN_NOT_OK(Flush());
+  }
+
+  // Upgrade to an exclusive commit lock and make atomic changes here.
+  lock_.UpgradeToCommitLock();
+  release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
+  auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
+
+  routing_table_ = std::move(routing_table);
+  proxy_graph_ = std::move(proxy_graph);
+
+  return Status::OK();
+}
+
+string DurableRoutingTable::NextHop(const std::string& src_uuid,
+                                    const std::string& dest_uuid) const {
+  shared_lock<RWCLock> l(lock_);
+  // TODO(mpercy): When uninitialized, routing_table_ should always return
+  // dest_uuid as the next hop (direct routing).
+  return routing_table_.NextHop(src_uuid, dest_uuid);
+}
+
+Status DurableRoutingTable::Flush() const {
+  // TODO(mpercy): flush protobuf to disk
+  return Status::OK();
 }
 
 } // namespace consensus
