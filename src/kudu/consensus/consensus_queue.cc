@@ -669,7 +669,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     request->set_caller_term(current_term);
     unreachable_time = MonoTime::Now() - peer_copy.last_communication_time;
 
-    next_hop_uuid = routing_table_.NextHop(local_peer_pb_.permanent_uuid(), uuid);
+    RETURN_NOT_OK(routing_table_.NextHop(local_peer_pb_.permanent_uuid(), uuid, &next_hop_uuid));
   }
 
   // Always trigger a health status update check at the end of this function.
@@ -937,7 +937,10 @@ void PeerMessageQueue::EndWatchForSuccessor() {
 
 string PeerMessageQueue::GetNextRoutingHopFromLeader(const string& dest_uuid) const {
   std::lock_guard<simple_spinlock> l(queue_lock_);
-  return routing_table_.NextHop(local_peer_pb_.permanent_uuid(), dest_uuid);
+  string next_hop;
+  // TODO(mpercy): Get rid of CHECK_OK.
+  CHECK_OK(routing_table_.NextHop(local_peer_pb_.permanent_uuid(), dest_uuid, &next_hop));
+  return next_hop;
 }
 
 void PeerMessageQueue::UpdateFollowerWatermarks(int64_t committed_index,

@@ -69,12 +69,11 @@ class RoutingTable {
               const ProxyGraphPB& proxy_graph,
               const std::string& leader_uuid);
 
-  // Return the UUID of the next hop, given the UUIDs of the current source
+  // Find the UUID of the next hop, given the UUIDs of the current source
   // and the ultimate destination.
-  // TODO(mpercy): Change NextHop() return value to boost::optional so that
-  // boost::none will indicate no route found, or return a Status.
-  std::string NextHop(const std::string& src_uuid,
-                      const std::string& dest_uuid) const;
+  Status NextHop(const std::string& src_uuid,
+                      const std::string& dest_uuid,
+                      std::string* next_hop) const;
 
  private:
   // A node representing a raft peer in a hierarchy with associated routing
@@ -122,8 +121,10 @@ class RoutingTable {
   std::unordered_map<std::string, Node*> index_;
 };
 
-// Thread-safe and durable metadata layer on top of RoutingTable.
-// Ensures that a single instance of RoutingTable is active at any given moment.
+// Thread-safe and durable metadata layer on top of RoutingTable. Only keeps
+// the ProxyGraphPB durable. Ensures that (at most) a single instance of
+// RoutingTable is active at any given moment.
+//
 //
 // TODO(mpercy): Think about the case where consensus has just been initialized
 // and we don't know the leader locally yet. In this case, how should we route
@@ -145,24 +146,29 @@ class DurableRoutingTable {
   // Initialize for the first time and write to disk.
   static Status Create(FsManager* fs_manager,
                        std::string tablet_id,
-                       ProxyGraphPB proxy_graph,
                        RaftConfigPB raft_config,
-                       std::string leader_uuid);
+                       ProxyGraphPB proxy_graph,
+                       std::unique_ptr<DurableRoutingTable>* drt);
 
   // Read from disk.
   static Status Load(FsManager* fs_manager,
                      std::string tablet_id,
-                     RaftConfigPB raft_config
-                     /* TODO(mpercy): we don't know leader uuid at startup! */);
-
-  // Called when the config or the leader changes.
-  Status UpdateRaftConfig(RaftConfigPB raft_config, std::string leader_uuid);
+                     RaftConfigPB raft_config,
+                     std::unique_ptr<DurableRoutingTable>* drt);
 
   // Called when the proxy graph changes.
   Status UpdateProxyGraph(ProxyGraphPB proxy_graph);
 
-  std::string NextHop(const std::string& src_uuid,
-                      const std::string& dest_uuid) const;
+  // Called when the Raft config changes.
+  Status UpdateRaftConfig(RaftConfigPB raft_config);
+
+  // Called when the leader changes.
+  Status UpdateLeader(std::string leader_uuid);
+
+  // If the leader is unknown, returns Status::NotInitialized().
+  Status NextHop(const std::string& src_uuid,
+                 const std::string& dest_uuid,
+                 std::string* next_hop) const;
 
  private:
   DurableRoutingTable(FsManager* fs_manager,
@@ -179,10 +185,10 @@ class DurableRoutingTable {
   const std::string tablet_id_;
 
   mutable RWCLock lock_; // read-write-commit lock protecting the below fields
-  RoutingTable routing_table_;
   ProxyGraphPB proxy_graph_;
   RaftConfigPB raft_config_;
-  std::string leader_uuid_;
+  boost::optional<std::string> leader_uuid_; // We don't always know who is leader.
+  boost::optional<RoutingTable> routing_table_; // When leader is unknown, the route is undefined.
 };
 
 }  // namespace consensus

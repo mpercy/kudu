@@ -53,10 +53,15 @@ TEST(RoutingTest, TestRoutingTable) {
   RoutingTable route;
   ASSERT_OK(route.Init(raft_config, proxy_graph, leader_uuid));
 
-  ASSERT_EQ("peer-5", route.NextHop("peer-3", "peer-5"));
-  ASSERT_EQ("peer-0", route.NextHop("peer-3", "peer-1"));
-  ASSERT_EQ("peer-3", route.NextHop("peer-5", "peer-1"));
-  ASSERT_EQ("peer-3", route.NextHop("peer-2", "peer-4"));
+  string next_hop;
+  ASSERT_OK(route.NextHop("peer-3", "peer-5", &next_hop));
+  ASSERT_EQ("peer-5", next_hop);
+  ASSERT_OK(route.NextHop("peer-3", "peer-1", &next_hop));
+  ASSERT_EQ("peer-0", next_hop);
+  ASSERT_OK(route.NextHop("peer-5", "peer-1", &next_hop));
+  ASSERT_EQ("peer-3", next_hop);
+  ASSERT_OK(route.NextHop("peer-2", "peer-4", &next_hop));
+  ASSERT_EQ("peer-3", next_hop);
 }
 
 } // namespace consensus

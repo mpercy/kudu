@@ -22,6 +22,7 @@
 
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/status.h"
@@ -31,6 +32,7 @@ using std::string;
 using std::unique_ptr;
 using std::unordered_map;
 using std::vector;
+using strings::Substitute;
 
 namespace kudu {
 namespace consensus {
@@ -160,46 +162,28 @@ void RoutingTable::ConstructNextHopIndicesRec(Node* cur) {
   cur->routes.emplace(cur->id(), cur->id());
 }
 
-string RoutingTable::NextHop(const string& src_uuid,
-                             const string& dest_uuid) const {
+Status RoutingTable::NextHop(const string& src_uuid,
+                             const string& dest_uuid,
+                             string* next_hop) const {
   Node* src = FindWithDefault(index_, src_uuid, nullptr);
+  if (!src) {
+    return Status::InvalidArgument(Substitute("unknown source uuid: $0", src_uuid));
+  }
   Node* dest = FindWithDefault(index_, dest_uuid, nullptr);
-  if (!src || !dest) return nullptr; // Does not exist.
-  // TODO(mpercy): instead of returning nullptr, return boost::none.
+  if (!dest) {
+    return Status::InvalidArgument(Substitute("unknown destination uuid: $0", dest_uuid));
+  }
 
   // Search children.
   string* next_uuid = FindOrNull(src->routes, dest_uuid);
   if (next_uuid) {
-    return *next_uuid;
+    *next_hop = *next_uuid;
+    return Status::OK();
   }
 
   // If we can't route via a child, route via a parent.
   DCHECK(src->parent);
-  return src->parent->id();
-}
-
-Status DurableRoutingTable::UpdateRaftConfig(RaftConfigPB raft_config, string leader_uuid) {
-  RaftPeerPB* peer_pb;
-  // Will return an error if 'leader_uuid' is not a member of the config.
-  RETURN_NOT_OK(GetRaftConfigMember(&raft_config, leader_uuid, &peer_pb));
-
-  // Take the write lock (does not block readers) and do the slow stuff here.
-  lock_.WriteLock();
-  auto release_write_lock = MakeScopedCleanup([&] { lock_.WriteUnlock(); });
-
-  // Rebuild the routing table.
-  RoutingTable routing_table;
-  RETURN_NOT_OK(routing_table.Init(raft_config, proxy_graph_, leader_uuid));
-
-  // Upgrade to an exclusive commit lock and make atomic changes here.
-  lock_.UpgradeToCommitLock();
-  release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
-  auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
-
-  routing_table_ = std::move(routing_table);
-  raft_config_ = std::move(raft_config);
-  leader_uuid_ = std::move(leader_uuid);
-
+  *next_hop = src->parent->id();
   return Status::OK();
 }
 
@@ -210,7 +194,9 @@ Status DurableRoutingTable::UpdateProxyGraph(ProxyGraphPB proxy_graph) {
 
   // Rebuild the routing table.
   RoutingTable routing_table;
-  RETURN_NOT_OK(routing_table.Init(raft_config_, proxy_graph, leader_uuid_));
+  if (leader_uuid_) {
+    RETURN_NOT_OK(routing_table.Init(raft_config_, proxy_graph, *leader_uuid_));
+  }
 
   // Only flush the proxy graph protobuf to disk when it changes.
   if (!MessageDifferencer::Equals(proxy_graph, proxy_graph_)) {
@@ -222,18 +208,91 @@ Status DurableRoutingTable::UpdateProxyGraph(ProxyGraphPB proxy_graph) {
   release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
   auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
 
-  routing_table_ = std::move(routing_table);
   proxy_graph_ = std::move(proxy_graph);
+
+  if (leader_uuid_) {
+    routing_table_ = std::move(routing_table);
+  } else {
+    routing_table_ = boost::none;
+  }
 
   return Status::OK();
 }
 
-string DurableRoutingTable::NextHop(const std::string& src_uuid,
-                                    const std::string& dest_uuid) const {
+Status DurableRoutingTable::UpdateRaftConfig(RaftConfigPB raft_config) {
+  //bool leader_in_config = IsRaftConfigMember(leader_uuid, raft_config);
+
+  // Take the write lock (does not block readers) and do the slow stuff here.
+  lock_.WriteLock();
+  auto release_write_lock = MakeScopedCleanup([&] { lock_.WriteUnlock(); });
+
+  // Rebuild the routing table.
+  RoutingTable routing_table;
+  bool leader_in_config = false;
+  if (leader_uuid_) {
+    leader_in_config = IsRaftConfigMember(*leader_uuid_, raft_config);
+  }
+  if (leader_in_config) {
+    RETURN_NOT_OK(routing_table.Init(raft_config, proxy_graph_, *leader_uuid_));
+  }
+
+  // Upgrade to an exclusive commit lock and make atomic changes here.
+  lock_.UpgradeToCommitLock();
+  release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
+  auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
+
+  raft_config_ = std::move(raft_config);
+
+  if (leader_in_config) {
+    routing_table_ = std::move(routing_table);
+  } else {
+    routing_table_ = boost::none;
+  }
+
+  return Status::OK();
+}
+
+Status DurableRoutingTable::UpdateLeader(string leader_uuid) {
+  // Take the write lock (does not block readers) and do the slow stuff here.
+  lock_.WriteLock();
+  auto release_write_lock = MakeScopedCleanup([&] { lock_.WriteUnlock(); });
+
+  RoutingTable routing_table;
+  bool leader_in_config = IsRaftConfigMember(leader_uuid, raft_config_);
+  if (leader_in_config) {
+    // Rebuild the routing table.
+    RETURN_NOT_OK(routing_table.Init(raft_config_, proxy_graph_, leader_uuid));
+  }
+
+  // Upgrade to an exclusive commit lock and make atomic changes here.
+  lock_.UpgradeToCommitLock();
+  release_write_lock.cancel(); // Unlocking the commit lock releases the write lock.
+  auto release_commit_lock = MakeScopedCleanup([&] { lock_.CommitUnlock(); });
+
+  leader_uuid_ = std::move(leader_uuid);
+  if (leader_in_config) {
+    routing_table_ = std::move(routing_table);
+  } else {
+    routing_table_ = boost::none;
+  }
+
+  return Status::OK();
+}
+
+Status DurableRoutingTable::NextHop(const std::string& src_uuid,
+                                    const std::string& dest_uuid,
+                                    std::string* next_hop) const {
   shared_lock<RWCLock> l(lock_);
-  // TODO(mpercy): When uninitialized, routing_table_ should always return
-  // dest_uuid as the next hop (direct routing).
-  return routing_table_.NextHop(src_uuid, dest_uuid);
+  if (routing_table_) {
+    return routing_table_->NextHop(src_uuid, dest_uuid, next_hop);
+  }
+  if (!IsRaftConfigMember(dest_uuid, raft_config_)) {
+    return Status::NotFound(
+        Substitute("peer with uuid $0 not found in consensus config", dest_uuid));
+  }
+
+  *next_hop = dest_uuid;
+  return Status::OK();
 }
 
 Status DurableRoutingTable::Flush() const {
