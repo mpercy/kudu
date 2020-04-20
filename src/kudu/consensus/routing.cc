@@ -35,8 +35,9 @@ DECLARE_bool(cmeta_force_fsync); // TODO make this part of cmeta API?
 
 using boost::optional;
 using google::protobuf::util::MessageDifferencer;
-using std::string;
+using std::shared_ptr;
 using std::unique_ptr;
+using std::string;
 using std::unordered_map;
 using std::vector;
 using strings::Substitute;
@@ -206,17 +207,16 @@ Status DurableRoutingTable::Create(FsManager* fs_manager,
                                    std::string tablet_id,
                                    RaftConfigPB raft_config,
                                    ProxyGraphPB proxy_graph,
-                                   std::unique_ptr<DurableRoutingTable>* drt) {
+                                   std::shared_ptr<DurableRoutingTable>* drt) {
   string path = fs_manager->GetProxyMetadataPath(tablet_id);
   if (fs_manager->env()->FileExists(path)) {
     return Status::AlreadyPresent(Substitute("File $0 already exists", path));
   }
 
-  auto tmp_drt = unique_ptr<DurableRoutingTable>(
-      new DurableRoutingTable(fs_manager,
-                              std::move(tablet_id),
-                              std::move(proxy_graph),
-                              std::move(raft_config)));
+  auto tmp_drt = std::shared_ptr<DurableRoutingTable>(new DurableRoutingTable(fs_manager,
+                                                  std::move(tablet_id),
+                                                  std::move(proxy_graph),
+                                                  std::move(raft_config)));
   RETURN_NOT_OK(tmp_drt->Flush()); // no lock needed as object is unpublished
   *drt = std::move(tmp_drt);
   return Status::OK();
@@ -226,7 +226,7 @@ Status DurableRoutingTable::Create(FsManager* fs_manager,
 Status DurableRoutingTable::Load(FsManager* fs_manager,
                                  std::string tablet_id,
                                  RaftConfigPB raft_config,
-                                 std::unique_ptr<DurableRoutingTable>* drt) {
+                                 std::shared_ptr<DurableRoutingTable>* drt) {
   string path = fs_manager->GetProxyMetadataPath(tablet_id);
 
   ProxyGraphPB proxy_graph;
@@ -234,13 +234,10 @@ Status DurableRoutingTable::Load(FsManager* fs_manager,
                                                  path,
                                                  &proxy_graph));
 
-  auto tmp_drt = unique_ptr<DurableRoutingTable>(
-      new DurableRoutingTable(fs_manager,
-                              std::move(tablet_id),
-                              std::move(proxy_graph),
-                              std::move(raft_config)));
-  *drt = std::move(tmp_drt);
-
+  *drt = std::shared_ptr<DurableRoutingTable>(new DurableRoutingTable(fs_manager,
+                                          std::move(tablet_id),
+                                          std::move(proxy_graph),
+                                          std::move(raft_config)));
   return Status::OK();
 }
 

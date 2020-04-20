@@ -148,13 +148,13 @@ class DurableRoutingTable {
                        std::string tablet_id,
                        RaftConfigPB raft_config,
                        ProxyGraphPB proxy_graph,
-                       std::unique_ptr<DurableRoutingTable>* drt);
+                       std::shared_ptr<DurableRoutingTable>* drt);
 
   // Read from disk.
   static Status Load(FsManager* fs_manager,
                      std::string tablet_id,
                      RaftConfigPB raft_config,
-                     std::unique_ptr<DurableRoutingTable>* drt);
+                     std::shared_ptr<DurableRoutingTable>* drt);
 
   // Called when the proxy graph changes.
   Status UpdateProxyGraph(ProxyGraphPB proxy_graph);
