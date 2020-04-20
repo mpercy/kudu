@@ -296,7 +296,7 @@ void Peer::SendNextRequest(bool even_if_queue_empty) {
 
   shared_ptr<PeerProxy> next_hop_proxy = peer_proxy_pool_->Get(next_hop_uuid);
   if (!next_hop_proxy) {
-    LOG(FATAL) << "TODO(mpercy): handle this error condition";
+    LOG(FATAL) << "peer with uuid " << next_hop_uuid << " not found in peer proxy pool";
   }
 
   next_hop_proxy->UpdateAsync(request_, &response_, &controller_,

@@ -60,6 +60,7 @@ using kudu::log::Log;
 using kudu::log::LogOptions;
 using kudu::rpc::Messenger;
 using kudu::rpc::MessengerBuilder;
+using std::make_shared;
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
@@ -139,10 +140,12 @@ class ConsensusPeersTest : public KuduTest {
     auto proxy_ptr = new DelayablePeerProxy<NoOpTestPeerProxy>(
         raft_pool_.get(), new NoOpTestPeerProxy(raft_pool_.get(), peer_pb));
     shared_ptr<PeerProxy> proxy(proxy_ptr);
+    peer_proxy_pool_.Put(peer_name, proxy);
     CHECK_OK(Peer::NewRemotePeer(std::move(peer_pb),
                                  kTabletId,
                                  kLeaderUuid,
                                  message_queue_.get(),
+                                 &peer_proxy_pool_,
                                  raft_pool_token_.get(),
                                  std::move(proxy),
                                  messenger_,
@@ -180,6 +183,7 @@ class ConsensusPeersTest : public KuduTest {
   unique_ptr<ThreadPoolToken> raft_pool_token_;
   unique_ptr<clock::Clock> clock_;
   shared_ptr<Messenger> messenger_;
+  PeerProxyPool peer_proxy_pool_;
 };
 
 
@@ -276,14 +280,16 @@ TEST_F(ConsensusPeersTest, TestCloseWhenRemotePeerDoesntMakeProgress) {
                                 kMinimumTerm,
                                 BuildRaftConfigPBForTests(3));
 
-  auto mock_proxy = new MockedPeerProxy(raft_pool_.get());
+  auto mock_proxy = make_shared<MockedPeerProxy>(raft_pool_.get());
+  peer_proxy_pool_.Put(kFollowerUuid, mock_proxy);
   shared_ptr<Peer> peer;
   ASSERT_OK(Peer::NewRemotePeer(FakeRaftPeerPB(kFollowerUuid),
                                 kTabletId,
                                 kLeaderUuid,
                                 message_queue_.get(),
+                                &peer_proxy_pool_,
                                 raft_pool_token_.get(),
-                                shared_ptr<PeerProxy>(mock_proxy),
+                                mock_proxy,
                                 messenger_,
                                 &peer));
 
@@ -314,14 +320,16 @@ TEST_F(ConsensusPeersTest, TestDontSendOneRpcPerWriteWhenPeerIsDown) {
                                 kMinimumTerm,
                                 BuildRaftConfigPBForTests(3));
 
-  auto mock_proxy = new MockedPeerProxy(raft_pool_.get());
+  auto mock_proxy = make_shared<MockedPeerProxy>(raft_pool_.get());
+  peer_proxy_pool_.Put(kFollowerUuid, mock_proxy);
   shared_ptr<Peer> peer;
   ASSERT_OK(Peer::NewRemotePeer(FakeRaftPeerPB(kFollowerUuid),
                                 kTabletId,
                                 kLeaderUuid,
                                 message_queue_.get(),
+                                &peer_proxy_pool_,
                                 raft_pool_token_.get(),
-                                shared_ptr<PeerProxy>(mock_proxy),
+                                mock_proxy,
                                 messenger_,
                                 &peer));
 
