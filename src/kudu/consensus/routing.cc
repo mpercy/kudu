@@ -20,13 +20,20 @@
 #include <glog/logging.h>
 #include <google/protobuf/util/message_differencer.h>
 
+#include "kudu/consensus/log_util.h"
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/util/env.h"
+#include "kudu/util/env_util.h"
 #include "kudu/util/locks.h"
+#include "kudu/util/pb_util.h"
 #include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/status.h"
 
+DECLARE_bool(cmeta_force_fsync); // TODO make this part of cmeta API?
+
+using boost::optional;
 using google::protobuf::util::MessageDifferencer;
 using std::string;
 using std::unique_ptr;
@@ -36,6 +43,10 @@ using strings::Substitute;
 
 namespace kudu {
 namespace consensus {
+
+////////////////////////////////////////////////////////////////////////////////
+// RoutingTable
+////////////////////////////////////////////////////////////////////////////////
 
 Status RoutingTable::Init(const RaftConfigPB& raft_config,
                           const ProxyGraphPB& proxy_graph,
@@ -187,6 +198,52 @@ Status RoutingTable::NextHop(const string& src_uuid,
   return Status::OK();
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// DurableRoutingTable
+////////////////////////////////////////////////////////////////////////////////
+
+Status DurableRoutingTable::Create(FsManager* fs_manager,
+                                   std::string tablet_id,
+                                   RaftConfigPB raft_config,
+                                   ProxyGraphPB proxy_graph,
+                                   std::unique_ptr<DurableRoutingTable>* drt) {
+  string path = fs_manager->GetProxyMetadataPath(tablet_id);
+  if (fs_manager->env()->FileExists(path)) {
+    return Status::AlreadyPresent(Substitute("File $0 already exists", path));
+  }
+
+  auto tmp_drt = unique_ptr<DurableRoutingTable>(
+      new DurableRoutingTable(fs_manager,
+                              std::move(tablet_id),
+                              std::move(proxy_graph),
+                              std::move(raft_config)));
+  RETURN_NOT_OK(tmp_drt->Flush()); // no lock needed as object is unpublished
+  *drt = std::move(tmp_drt);
+  return Status::OK();
+}
+
+// Read from disk.
+Status DurableRoutingTable::Load(FsManager* fs_manager,
+                                 std::string tablet_id,
+                                 RaftConfigPB raft_config,
+                                 std::unique_ptr<DurableRoutingTable>* drt) {
+  string path = fs_manager->GetProxyMetadataPath(tablet_id);
+
+  ProxyGraphPB proxy_graph;
+  RETURN_NOT_OK(pb_util::ReadPBContainerFromPath(fs_manager->env(),
+                                                 path,
+                                                 &proxy_graph));
+
+  auto tmp_drt = unique_ptr<DurableRoutingTable>(
+      new DurableRoutingTable(fs_manager,
+                              std::move(tablet_id),
+                              std::move(proxy_graph),
+                              std::move(raft_config)));
+  *drt = std::move(tmp_drt);
+
+  return Status::OK();
+}
+
 Status DurableRoutingTable::UpdateProxyGraph(ProxyGraphPB proxy_graph) {
   // Take the write lock (does not block readers) and do the slow stuff here.
   lock_.WriteLock();
@@ -295,8 +352,49 @@ Status DurableRoutingTable::NextHop(const std::string& src_uuid,
   return Status::OK();
 }
 
+DurableRoutingTable::DurableRoutingTable(FsManager* fs_manager,
+                                         string tablet_id,
+                                         ProxyGraphPB proxy_graph,
+                                         RaftConfigPB raft_config)
+    : fs_manager_(fs_manager),
+      tablet_id_(std::move(tablet_id)),
+      proxy_graph_(std::move(proxy_graph)),
+      raft_config_(std::move(raft_config)) {
+  // TODO(mpercy): Do we have any validation to perform here?
+}
+
 Status DurableRoutingTable::Flush() const {
-  // TODO(mpercy): flush protobuf to disk
+  // TODO(mpercy): This entire method is copy / pasted from
+  // ConsensusMetadata::Flush(). Factor out?
+
+  // Create directories if needed.
+  string dir = fs_manager_->GetConsensusMetadataDir();
+  bool created_dir = false;
+  RETURN_NOT_OK_PREPEND(env_util::CreateDirIfMissing(
+      fs_manager_->env(), dir, &created_dir),
+                        "Unable to create consensus metadata root dir");
+  // fsync() parent dir if we had to create the dir.
+  if (PREDICT_FALSE(created_dir)) {
+    string parent_dir = DirName(dir);
+    RETURN_NOT_OK_PREPEND(Env::Default()->SyncDir(parent_dir),
+                          "Unable to fsync consensus parent dir " + parent_dir);
+  }
+
+  string path = fs_manager_->GetProxyMetadataPath(tablet_id_);
+  RETURN_NOT_OK_PREPEND(pb_util::WritePBContainerToPath(
+      fs_manager_->env(), path, proxy_graph_, pb_util::OVERWRITE,
+      // We use FLAGS_log_force_fsync_all here because the consensus metadata is
+      // essentially an extension of the primary durability mechanism of the
+      // consensus subsystem: the WAL. Using the same flag ensures that the WAL
+      // and the consensus metadata get the same durability guarantees.
+      // We add FLAGS_cmeta_force_fsync to support an override in certain
+      // cases. Some filesystems such as ext4 are more forgiving to omitting an
+      // fsync() due to periodic commit with default settings, whereas other
+      // filesystems such as XFS will not commit as often and need the fsync to
+      // avoid significant data loss when a crash happens.
+      FLAGS_log_force_fsync_all || FLAGS_cmeta_force_fsync ? pb_util::SYNC : pb_util::NO_SYNC),
+          Substitute("Unable to write proxy metadata file for tablet $0 to path $1",
+                     tablet_id_, path));
   return Status::OK();
 }
 

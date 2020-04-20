@@ -173,12 +173,11 @@ class DurableRoutingTable {
  private:
   DurableRoutingTable(FsManager* fs_manager,
                       std::string tablet_id,
-                      RoutingTable routing_table,
                       ProxyGraphPB proxy_graph,
-                      RaftConfigPB raft_config,
-                      std::string leader_uuid);
+                      RaftConfigPB raft_config);
 
   // We flush a new ProxyGraphPB to disk before committing the updated version to memory.
+  // This method is not thread-safe and must be synchronized by taking the lock or similar.
   Status Flush() const;
 
   FsManager* fs_manager_;
