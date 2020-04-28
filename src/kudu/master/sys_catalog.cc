@@ -214,7 +214,7 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
     LOG(INFO) << "Verifying existing consensus state";
     string tablet_id = metadata->tablet_id();
     scoped_refptr<ConsensusMetadata> cmeta;
-    RETURN_NOT_OK_PREPEND(cmeta_manager_->Load(tablet_id, &cmeta),
+    RETURN_NOT_OK_PREPEND(cmeta_manager_->LoadCMeta(tablet_id, &cmeta),
                           "Unable to load consensus metadata for tablet " + tablet_id);
     ConsensusStatePB cstate = cmeta->ToConsensusStatePB();
     RETURN_NOT_OK(consensus::VerifyRaftConfig(cstate.committed_config()));
@@ -295,8 +295,12 @@ Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
   }
 
   string tablet_id = metadata->tablet_id();
-  RETURN_NOT_OK_PREPEND(cmeta_manager_->Create(tablet_id, config, consensus::kMinimumTerm),
+  RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateCMeta(tablet_id, config, consensus::kMinimumTerm),
                         "Unable to persist consensus metadata for tablet " + tablet_id);
+  // TODO(mpercy): Provide a way to specify the proxy graph at tablet creation time.
+  // For now, we initialize with an empty proxy graph.
+  RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateDRT(tablet_id, config, {}),
+                        "Unable to create new durable routing table for tablet " + tablet_id);
 
   return SetupTablet(metadata);
 }
@@ -392,7 +396,7 @@ Status SysCatalogTable::SetupTablet(
 
   InitLocalRaftPeerPB();
   scoped_refptr<ConsensusMetadata> cmeta;
-  RETURN_NOT_OK(cmeta_manager_->Load(metadata->tablet_id(), &cmeta));
+  RETURN_NOT_OK(cmeta_manager_->LoadCMeta(metadata->tablet_id(), &cmeta));
 
   // TODO(matteo): handle crash mid-creation of tablet? do we ever end up with
   // a partially created tablet here?

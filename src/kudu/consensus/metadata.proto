@@ -35,6 +35,10 @@ message RaftPeerAttrsPB {
   // If set to 'true', the replica needs to be replaced regardless of
   // its health report.
   optional bool replace = 2 [ default = false ];
+
+  // Optional node to receive replicate messges from, instead of directly from
+  // the leader.
+  optional bytes proxy_from = 3;
 }
 
 // Report on a replica's (peer's) health.
@@ -128,6 +132,17 @@ message RaftConfigPB {
 
   // The set of peers in the configuration.
   repeated RaftPeerPB peers = 3;
+}
+
+// A single directed edge on the request proxying graph.
+message ProxyEdgePB {
+  optional string peer_uuid = 1;        // Peer getting its requests proxied.
+  optional string proxy_from_uuid = 2;  // Peer to proxy from.
+}
+
+// A directed graph representation of the proxy topology.
+message ProxyTopologyPB {
+  repeated ProxyEdgePB proxy_edges = 1;
 }
 
 // Represents a snapshot of a configuration at a given moment in time.

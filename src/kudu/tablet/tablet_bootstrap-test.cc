@@ -136,7 +136,7 @@ class BootstrapTest : public LogTestBase {
     peer->set_permanent_uuid(meta->fs_manager()->uuid());
     peer->set_member_type(consensus::RaftPeerPB::VOTER);
 
-    RETURN_NOT_OK_PREPEND(cmeta_manager_->Create(meta->tablet_id(), config, kMinimumTerm),
+    RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateCMeta(meta->tablet_id(), config, kMinimumTerm),
                           "Unable to create consensus metadata");
 
     return Status::OK();
@@ -155,7 +155,7 @@ class BootstrapTest : public LogTestBase {
                                   ConsensusBootstrapInfo* boot_info) {
 
     scoped_refptr<ConsensusMetadata> cmeta;
-    RETURN_NOT_OK(cmeta_manager_->Load(meta->tablet_id(), &cmeta));
+    RETURN_NOT_OK(cmeta_manager_->LoadCMeta(meta->tablet_id(), &cmeta));
 
     // Close the existing log to evict any segments from the file cache so that
     // bootstrap won't access any stale (cached) segments.

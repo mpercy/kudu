@@ -491,8 +491,12 @@ Status TSTabletManager::CreateNewTablet(const string& table_id,
 
   // We must persist the consensus metadata to disk before starting a new
   // tablet's TabletReplica and RaftConsensus implementation.
-  RETURN_NOT_OK_PREPEND(cmeta_manager_->Create(tablet_id, config, kMinimumTerm),
+  RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateCMeta(tablet_id, config, kMinimumTerm),
                         "Unable to create new ConsensusMetadata for tablet " + tablet_id);
+  // TODO(mpercy): Provide a way to specify the proxy graph at tablet creation time.
+  // For now, we initialize with an empty proxy graph.
+  RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateDRT(tablet_id, config, {}),
+                        "Unable to create new durable routing table for tablet " + tablet_id);
   scoped_refptr<TabletReplica> new_replica;
   RETURN_NOT_OK(CreateAndRegisterTabletReplica(meta, NEW_REPLICA, &new_replica));
 
@@ -1097,7 +1101,7 @@ void TSTabletManager::OpenTablet(const scoped_refptr<TabletReplica>& replica,
   }
 
   scoped_refptr<ConsensusMetadata> cmeta;
-  Status s = cmeta_manager_->Load(replica->tablet_id(), &cmeta);
+  Status s = cmeta_manager_->LoadCMeta(replica->tablet_id(), &cmeta);
   auto fail_tablet = MakeScopedCleanup([&]() {
     // If something goes wrong, clean up the replica's internal members and mark
     // it FAILED.
@@ -1435,7 +1439,7 @@ Status TSTabletManager::HandleNonReadyTabletOnStartup(const scoped_refptr<Tablet
     // As an optimization, the cmeta is created with the NO_FLUSH_ON_CREATE
     // flag, meaning that it will only be flushed to disk if the replica ever
     // votes.
-    RETURN_NOT_OK(cmeta_manager_->LoadOrCreate(tablet_id, RaftConfigPB(), kMinimumTerm,
+    RETURN_NOT_OK(cmeta_manager_->LoadOrCreateCMeta(tablet_id, RaftConfigPB(), kMinimumTerm,
                                                ConsensusMetadataCreateMode::NO_FLUSH_ON_CREATE));
   }
 
@@ -1497,7 +1501,7 @@ Status TSTabletManager::DeleteTabletData(
   DCHECK_EQ(TABLET_DATA_DELETED, delete_type);
 
   LOG(INFO) << LogPrefix(tablet_id, meta->fs_manager()) << "Deleting consensus metadata";
-  Status s = cmeta_manager->Delete(tablet_id);
+  Status s = cmeta_manager->DeleteCMeta(tablet_id);
   // NotFound means we already deleted the cmeta in a previous attempt.
   if (PREDICT_FALSE(!s.ok() && !s.IsNotFound())) {
     if (s.IsDiskFailure()) {
@@ -1507,6 +1511,16 @@ Status TSTabletManager::DeleteTabletData(
     return s;
   }
   MAYBE_FAULT(FLAGS_fault_crash_after_cmeta_deleted);
+  LOG(INFO) << LogPrefix(tablet_id, meta->fs_manager()) << "Deleting durable routing table";
+  s = cmeta_manager->DeleteDRT(tablet_id);
+  // NotFound means we already deleted the DRT in a previous attempt.
+  if (PREDICT_FALSE(!s.ok() && !s.IsNotFound())) {
+    if (s.IsDiskFailure()) {
+      LOG(FATAL) << LogPrefix(tablet_id, meta->fs_manager())
+                 << "durable routing table metadata is on a failed disk";
+    }
+    return s;
+  }
   s = meta->DeleteSuperBlock();
   if (PREDICT_FALSE(!s.ok())) {
     if (s.IsDiskFailure()) {
