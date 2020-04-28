@@ -157,7 +157,7 @@ class TabletCopyTest : public KuduTabletTest {
 
     scoped_refptr<ConsensusMetadataManager> cmeta_manager(
         new ConsensusMetadataManager(fs_manager()));
-    ASSERT_OK(cmeta_manager->Create(tablet()->tablet_id(), config, kMinimumTerm));
+    ASSERT_OK(cmeta_manager->CreateCMeta(tablet()->tablet_id(), config, kMinimumTerm));
 
     tablet_replica_.reset(
         new TabletReplica(tablet()->metadata(),

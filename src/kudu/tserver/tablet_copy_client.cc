@@ -218,7 +218,7 @@ Status TabletCopyClient::SetTabletToReplace(const scoped_refptr<TabletMetadata>&
 
   // Load the old consensus metadata, if it exists.
   scoped_refptr<ConsensusMetadata> cmeta;
-  Status s = cmeta_manager_->Load(tablet_id_, &cmeta);
+  Status s = cmeta_manager_->LoadCMeta(tablet_id_, &cmeta);
   if (s.IsNotFound()) {
     // The consensus metadata was not written to disk, possibly due to a failed
     // tablet copy.
@@ -661,7 +661,7 @@ Status TabletCopyClient::WriteConsensusMetadata() {
 
   // If we didn't find a previous consensus meta file, create one.
   if (!cmeta_) {
-    return cmeta_manager_->Create(tablet_id_,
+    return cmeta_manager_->CreateCMeta(tablet_id_,
                                   remote_cstate_->committed_config(),
                                   remote_cstate_->current_term());
   }

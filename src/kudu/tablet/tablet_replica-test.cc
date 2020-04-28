@@ -137,7 +137,7 @@ class TabletReplicaTest : public KuduTabletTest {
 
 
     if (new_replica) {
-      ASSERT_OK(cmeta_manager_->Create(tablet()->tablet_id(), config, consensus::kMinimumTerm));
+      ASSERT_OK(cmeta_manager_->CreateCMeta(tablet()->tablet_id(), config, consensus::kMinimumTerm));
     }
 
     // "Bootstrap" and start the TabletReplica.
@@ -218,7 +218,7 @@ class TabletReplicaTest : public KuduTabletTest {
     tablet_replica_.reset();
     NO_FATALS(SetUpReplica(/*new_replica=*/ false));
     scoped_refptr<ConsensusMetadata> cmeta;
-    ASSERT_OK(cmeta_manager_->Load(tablet_replica_->tablet_id(), &cmeta));
+    ASSERT_OK(cmeta_manager_->LoadCMeta(tablet_replica_->tablet_id(), &cmeta));
     shared_ptr<Tablet> tablet;
     scoped_refptr<Log> log;
     ConsensusBootstrapInfo bootstrap_info;
