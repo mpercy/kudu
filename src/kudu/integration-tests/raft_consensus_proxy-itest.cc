@@ -276,5 +276,68 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   ASSERT_EQ(kNumReplicas - 1, ok_count);
 }
 
+// Test a real leader with routing.
+TEST_F(RaftConsensusProxyITest, ProxyRealLeaderWithRouting) {
+  // Desired test topology, with A* as the leader:
+  //
+  //      A* -> B -> C -> D
+  //
+  const int kNumReplicas = 4;
+  const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
+
+  NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
+  FLAGS_enable_leader_failure_detection = false;
+  FLAGS_catalog_manager_wait_for_new_tablets_to_elect_leader = false;
+
+  // Create the test table.
+  TestWorkload workload(cluster_.get());
+  workload.set_num_replicas(kNumReplicas);
+  workload.Setup();
+
+  // Determine the generated tablet id.
+  ASSERT_OK(inspect_->WaitForReplicaCount(kNumReplicas));
+  vector<string> tablets = inspect_->ListTablets();
+  ASSERT_EQ(1, tablets.size());
+  const string& tablet_id = tablets[0];
+
+  const int kLeaderIndex = 0; // first ts is the leader
+  TServerDetails* leader = ts_map_[cluster_->mini_tablet_server(kLeaderIndex)->uuid()];
+  ASSERT_OK(WaitUntilTabletRunning(leader, tablet_id, kTimeout));
+  ASSERT_OK(itest::StartElection(leader, tablet_id, kTimeout));
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/ 1));
+
+  // Change the toplogy to look like TS0, TS1 -> TS2 -> TS3.
+  ConsensusStatePB cstate;
+  ASSERT_OK(WaitUntilNoPendingConfig(leader, tablet_id, kTimeout, &cstate));
+
+  RaftConfigPB new_config = cstate.committed_config();
+  ASSERT_EQ(4, new_config.peers_size());
+
+  vector<consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB> changes;
+  for (int i = 2; i < kNumReplicas; i++) {
+    consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB change_pb;
+    change_pb.set_type(consensus::MODIFY_PEER);
+    change_pb.mutable_peer()->set_permanent_uuid(cluster_->mini_tablet_server(i)->uuid());
+    change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
+        cluster_->mini_tablet_server(i - 1)->uuid());
+    changes.emplace_back(std::move(change_pb));
+  }
+  ASSERT_OK(BulkChangeConfig(leader, tablet_id, changes, kTimeout));
+
+  // Number of operations we have replicated to the replica set before starting our workload.
+  const int kNumOpsReplicatedBeforeWriting = 2;
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id,
+                                  kNumOpsReplicatedBeforeWriting));
+
+  // Now run a workload on the leader and wait until all replicas converge.
+  workload.Start();
+  while (workload.batches_completed() < 10) {
+    SleepFor(MonoDelta::FromMilliseconds(50));
+  }
+  workload.StopAndJoin();
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id,
+                                  kNumOpsReplicatedBeforeWriting + workload.batches_completed()));
+}
+
 } // namespace itest
 } // namespace kudu
