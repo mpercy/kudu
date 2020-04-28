@@ -36,6 +36,7 @@
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/quorum_util.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/consensus/time_manager.h"
 #include "kudu/gutil/bind.h"
 #include "kudu/gutil/bind_helpers.h"
@@ -175,6 +176,7 @@ PeerMessageQueue::PeerMessageQueue(const scoped_refptr<MetricEntity>& metric_ent
                                    scoped_refptr<log::Log> log,
                                    TimeManager* time_manager,
                                    RaftPeerPB local_peer_pb,
+                                   std::shared_ptr<DurableRoutingTable> routing_table,
                                    string tablet_id,
                                    unique_ptr<ThreadPoolToken> raft_pool_observers_token,
                                    const atomic<bool>* server_quiescing,
@@ -183,6 +185,7 @@ PeerMessageQueue::PeerMessageQueue(const scoped_refptr<MetricEntity>& metric_ent
     : raft_pool_observers_token_(std::move(raft_pool_observers_token)),
       server_quiescing_(server_quiescing),
       local_peer_pb_(std::move(local_peer_pb)),
+      routing_table_(std::move(routing_table)),
       tablet_id_(std::move(tablet_id)),
       successor_watch_in_progress_(false),
       log_cache_(metric_entity, std::move(log), local_peer_pb_.permanent_uuid(), tablet_id_),
@@ -907,6 +910,10 @@ void PeerMessageQueue::BeginWatchForSuccessor(
 void PeerMessageQueue::EndWatchForSuccessor() {
   std::lock_guard<simple_spinlock> l(queue_lock_);
   successor_watch_in_progress_ = false;
+}
+
+Status PeerMessageQueue::GetNextRoutingHopFromLeader(const string& dest_uuid, string* next_hop) const {
+  return routing_table_->NextHop(local_peer_pb_.permanent_uuid(), dest_uuid, next_hop);
 }
 
 void PeerMessageQueue::UpdateFollowerWatermarks(int64_t committed_index,
