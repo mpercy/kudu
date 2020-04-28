@@ -33,6 +33,7 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/ref_counted_replicate.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/gutil/gscoped_ptr.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/threading/thread_collision_warner.h"
@@ -189,6 +190,7 @@ class PeerMessageQueue {
                    scoped_refptr<log::Log> log,
                    TimeManager* time_manager,
                    RaftPeerPB local_peer_pb,
+                   std::shared_ptr<DurableRoutingTable> routing_table,
                    std::string tablet_id,
                    std::unique_ptr<ThreadPoolToken> raft_pool_observers_token,
                    const std::atomic<bool>* server_quiescing,
@@ -368,6 +370,10 @@ class PeerMessageQueue {
   // with the UUID of the first voter that is caught up.
   void BeginWatchForSuccessor(const boost::optional<std::string>& successor_uuid);
   void EndWatchForSuccessor();
+
+  // Get the UUID of the next routing hop from the local node.
+  // Results not guaranteed to be valid if the current node is not the leader.
+  Status GetNextRoutingHopFromLeader(const std::string& dest_uuid, std::string* next_hop) const;
 
   // TODO(mpercy): It's probably not safe in general to access a queue's log
   // cache via bare pointer, since (IIRC) a queue will be reconstructed
@@ -564,6 +570,8 @@ class PeerMessageQueue {
 
   // PB containing identifying information about the local peer.
   const RaftPeerPB local_peer_pb_;
+
+  std::shared_ptr<DurableRoutingTable> routing_table_;
 
   // The id of the tablet.
   const std::string tablet_id_;

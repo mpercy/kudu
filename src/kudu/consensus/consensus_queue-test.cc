@@ -49,6 +49,7 @@
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/ref_counted_replicate.h"
+#include "kudu/consensus/routing.h"
 #include "kudu/consensus/time_manager.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/gscoped_ptr.h"
@@ -69,6 +70,7 @@ DECLARE_int32(follower_unavailable_considered_failed_sec);
 using kudu::consensus::HealthReportPB;
 using std::atomic;
 using std::deque;
+using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
 using std::vector;
@@ -105,6 +107,8 @@ class ConsensusQueueTest : public KuduTest {
                             /*schema_version*/0,
                             /*metric_entity*/nullptr,
                             &log_));
+
+    ASSERT_OK(DurableRoutingTable::Create(fs_manager_.get(), kTestTablet, {}, {}, &routing_table_));
     clock_.reset(new clock::HybridClock(metric_entity_server_));
     ASSERT_OK(clock_->Init());
 
@@ -119,6 +123,7 @@ class ConsensusQueueTest : public KuduTest {
         log_.get(),
         time_manager_.get(),
         FakeRaftPeerPB(kLeaderUuid),
+        routing_table_,
         kTestTablet,
         raft_pool_->NewToken(ThreadPool::ExecutionMode::SERIAL),
         &quiescing_,
@@ -244,6 +249,7 @@ class ConsensusQueueTest : public KuduTest {
   scoped_refptr<log::Log> log_;
   unique_ptr<ThreadPool> raft_pool_;
   unique_ptr<TimeManager> time_manager_;
+  shared_ptr<DurableRoutingTable> routing_table_;
   gscoped_ptr<PeerMessageQueue> queue_;
   scoped_refptr<log::LogAnchorRegistry> registry_;
   unique_ptr<clock::Clock> clock_;
