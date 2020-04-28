@@ -810,7 +810,7 @@ Status TabletScan(const RunnerContext& context) {
   scoped_refptr<ConsensusMetadataManager> cmeta_manager(
       new ConsensusMetadataManager(&fs));
   scoped_refptr<ConsensusMetadata> cmeta;
-  RETURN_NOT_OK(cmeta_manager->Load(tablet_id, &cmeta));
+  RETURN_NOT_OK(cmeta_manager->LoadCMeta(tablet_id, &cmeta));
 
   LogicalClock clock(Timestamp::kInitialTimestamp);
   RETURN_NOT_OK(clock.Init());

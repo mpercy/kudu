@@ -186,7 +186,7 @@ class RaftConsensusQuorumTest : public KuduTest {
       scoped_refptr<ConsensusMetadataManager> cmeta_manager(
           new ConsensusMetadataManager(fs));
 
-      RETURN_NOT_OK(cmeta_manager->Create(kTestTablet, config_, kMinimumTerm));
+      RETURN_NOT_OK(cmeta_manager->CreateCMeta(kTestTablet, config_, kMinimumTerm));
 
       RaftPeerPB* local_peer_pb;
       RETURN_NOT_OK(GetRaftConfigMember(&config_, fs->uuid(), &local_peer_pb));
