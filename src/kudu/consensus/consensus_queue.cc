@@ -641,6 +641,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
   int64_t current_term;
   TrackedPeer peer_copy;
   MonoDelta unreachable_time;
+  string next_hop_uuid;
   {
     std::lock_guard<simple_spinlock> lock(queue_lock_);
     DCHECK_EQ(queue_state_.state, kQueueOpen);
@@ -666,6 +667,8 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     request->set_last_idx_appended_to_leader(queue_state_.last_appended.index());
     request->set_caller_term(current_term);
     unreachable_time = MonoTime::Now() - peer_copy.last_communication_time;
+
+    RETURN_NOT_OK(routing_table_->NextHop(local_peer_pb_.permanent_uuid(), uuid, &next_hop_uuid));
   }
 
   // Always trigger a health status update check at the end of this function.
@@ -690,6 +693,12 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     return Status::OK();
   }
   *needs_tablet_copy = false;
+
+  // If the next hop != the destination, we are sending these messages via a proxy.
+  bool route_via_proxy = next_hop_uuid != uuid;
+  if (route_via_proxy) {
+    request->set_proxy_dest_uuid(next_hop_uuid);
+  }
 
   // If we've never communicated with the peer, we don't know what messages to
   // send, so we'll send a status-only request. Otherwise, we grab requests
@@ -741,10 +750,23 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     // "all replicated" point. At some point we may want to allow partially loading
     // (and not pinning) earlier messages. At that point we'll need to do something
     // smarter here, like copy or ref-count.
-    for (const ReplicateRefPtr& msg : messages) {
-      request->mutable_ops()->AddAllocated(msg->get());
+    if (!route_via_proxy) {
+      for (const ReplicateRefPtr& msg : messages) {
+        request->mutable_ops()->AddAllocated(msg->get());
+      }
+      msg_refs->swap(messages);
+    } else {
+      vector<ReplicateRefPtr> proxy_ops;
+      for (const ReplicateRefPtr& msg : messages) {
+        ReplicateRefPtr proxy_op = make_scoped_refptr_replicate(new ReplicateMsg);
+        *proxy_op->get()->mutable_id() = msg->get()->id();
+        proxy_op->get()->set_timestamp(msg->get()->timestamp());
+        proxy_op->get()->set_op_type(PROXY_OP);
+        request->mutable_ops()->AddAllocated(proxy_op->get());
+        proxy_ops.emplace_back(std::move(proxy_op));
+      }
+      msg_refs->swap(proxy_ops);
     }
-    msg_refs->swap(messages);
   }
 
   DCHECK(preceding_id.IsInitialized());
@@ -1130,6 +1152,10 @@ bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
   Mode mode_copy;
   {
     std::lock_guard<simple_spinlock> scoped_lock(queue_lock_);
+
+    // TODO(mpercy): Handle response from proxy on behalf of another peer.
+    // For now, we'll try to ignore proxying here, but we may need to
+    // eventually handle that here for better health status and error logging.
 
     TrackedPeer* peer = FindPtrOrNull(peers_map_, peer_uuid);
     if (PREDICT_FALSE(queue_state_.state != kQueueOpen || peer == nullptr)) {

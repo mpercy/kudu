@@ -98,6 +98,7 @@ class ConsensusPeersTest : public KuduTest {
                         0, // schema_version
                         /*metric_entity*/nullptr,
                         &log_));
+    ASSERT_OK(DurableRoutingTable::Create(fs_manager_.get(), kTabletId, {}, {}, &routing_table_));
     clock_.reset(new clock::HybridClock(metric_entity_server_));
     ASSERT_OK(clock_->Init());
 

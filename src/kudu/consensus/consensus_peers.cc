@@ -287,10 +287,23 @@ void Peer::SendNextRequest(bool even_if_queue_empty) {
   // Capture a shared_ptr reference into the RPC callback so that we're guaranteed
   // that this object outlives the RPC.
   shared_ptr<Peer> s_this = shared_from_this();
-  proxy_->UpdateAsync(request_, &response_, &controller_,
-                      [s_this]() {
-                        s_this->ProcessResponse();
-                      });
+
+  // TODO(mpercy): An error here means that the peer is not in the config. Need
+  // to see whether we can remove this CHECK, since in that case, what is the
+  // state of the current Peer object?
+  string next_hop_uuid;
+  CHECK_OK(queue_->GetNextRoutingHopFromLeader(peer_pb().permanent_uuid(), &next_hop_uuid));
+
+  shared_ptr<PeerProxy> next_hop_proxy = peer_proxy_pool_->Get(next_hop_uuid);
+  if (!next_hop_proxy) {
+    LOG_WITH_PREFIX_UNLOCKED(FATAL) << "peer with uuid " << next_hop_uuid
+                                    << " not found in peer proxy pool";
+  }
+
+  next_hop_proxy->UpdateAsync(request_, &response_, &controller_,
+                              [s_this]() {
+                                s_this->ProcessResponse();
+                              });
 }
 
 void Peer::StartElection() {
