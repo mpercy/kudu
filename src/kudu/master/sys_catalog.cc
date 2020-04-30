@@ -295,10 +295,12 @@ Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
   }
 
   string tablet_id = metadata->tablet_id();
+  LOG(INFO) << "T " << tablet_id << " P " << fs_manager->uuid() << ": Creating cmeta...";
   RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateCMeta(tablet_id, config, consensus::kMinimumTerm),
                         "Unable to persist consensus metadata for tablet " + tablet_id);
   // TODO(mpercy): Provide a way to specify the proxy graph at tablet creation time.
   // For now, we initialize with an empty proxy graph.
+  LOG(INFO) << "T " << tablet_id << " P " << fs_manager->uuid() << ": Creating DRT...";
   RETURN_NOT_OK_PREPEND(cmeta_manager_->CreateDRT(tablet_id, config, {}),
                         "Unable to create new durable routing table for tablet " + tablet_id);
 
@@ -454,6 +456,7 @@ Status SysCatalogTable::SetupTablet(
 }
 
 std::string SysCatalogTable::LogPrefix() const {
+  DCHECK(tablet_replica_);
   return Substitute("T $0 P $1 [$2]: ",
                     tablet_replica_->tablet_id(),
                     tablet_replica_->permanent_uuid(),
