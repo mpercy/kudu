@@ -90,6 +90,7 @@ class ConsensusPeersTest : public KuduTest {
     fs_manager_.reset(new FsManager(env_, FsManagerOpts(GetTestPath("fs_root"))));
     ASSERT_OK(fs_manager_->CreateInitialFileSystemLayout());
     ASSERT_OK(fs_manager_->Open());
+    raft_config_ = BuildRaftConfigPBForTests(3);
     ASSERT_OK(Log::Open(options_,
                         fs_manager_.get(),
                         /*file_cache*/nullptr,
@@ -98,7 +99,7 @@ class ConsensusPeersTest : public KuduTest {
                         0, // schema_version
                         /*metric_entity*/nullptr,
                         &log_));
-    ASSERT_OK(DurableRoutingTable::Create(fs_manager_.get(), kTabletId, {}, {}, &routing_table_));
+    ASSERT_OK(DurableRoutingTable::Create(fs_manager_.get(), kTabletId, raft_config_, {}, &routing_table_));
     clock_.reset(new clock::HybridClock(metric_entity_server_));
     ASSERT_OK(clock_->Init());
 
@@ -173,6 +174,7 @@ class ConsensusPeersTest : public KuduTest {
   }
 
  protected:
+  RaftConfigPB raft_config_;
   MetricRegistry metric_registry_;
   scoped_refptr<MetricEntity> metric_entity_server_;
   scoped_refptr<MetricEntity> metric_entity_tablet_;
@@ -201,7 +203,7 @@ TEST_F(ConsensusPeersTest, TestRemotePeer) {
   // in addition to our real local log.
   message_queue_->SetLeaderMode(kMinimumOpIdIndex,
                                 kMinimumTerm,
-                                BuildRaftConfigPBForTests(3));
+                                raft_config_);
 
   shared_ptr<Peer> remote_peer;
   DelayablePeerProxy<NoOpTestPeerProxy>* proxy =
@@ -224,7 +226,7 @@ TEST_F(ConsensusPeersTest, TestRemotePeer) {
 TEST_F(ConsensusPeersTest, TestRemotePeers) {
   message_queue_->SetLeaderMode(kMinimumOpIdIndex,
                                 kMinimumTerm,
-                                BuildRaftConfigPBForTests(3));
+                                raft_config_);
 
   // Create a set of remote peers
   shared_ptr<Peer> remote_peer1;
@@ -282,7 +284,7 @@ TEST_F(ConsensusPeersTest, TestRemotePeers) {
 TEST_F(ConsensusPeersTest, TestCloseWhenRemotePeerDoesntMakeProgress) {
   message_queue_->SetLeaderMode(kMinimumOpIdIndex,
                                 kMinimumTerm,
-                                BuildRaftConfigPBForTests(3));
+                                raft_config_);
 
   auto mock_proxy = make_shared<MockedPeerProxy>(raft_pool_.get());
   peer_proxy_pool_.Put(kFollowerUuid, mock_proxy);
@@ -322,7 +324,7 @@ TEST_F(ConsensusPeersTest, TestCloseWhenRemotePeerDoesntMakeProgress) {
 TEST_F(ConsensusPeersTest, TestDontSendOneRpcPerWriteWhenPeerIsDown) {
   message_queue_->SetLeaderMode(kMinimumOpIdIndex,
                                 kMinimumTerm,
-                                BuildRaftConfigPBForTests(3));
+                                raft_config_);
 
   auto mock_proxy = make_shared<MockedPeerProxy>(raft_pool_.get());
   peer_proxy_pool_.Put(kFollowerUuid, mock_proxy);
