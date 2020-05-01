@@ -37,6 +37,7 @@
 #include "kudu/consensus/consensus_queue.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid_util.h"
+#include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/routing.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/map-util.h"
@@ -292,7 +293,11 @@ void Peer::SendNextRequest(bool even_if_queue_empty) {
   // to see whether we can remove this CHECK, since in that case, what is the
   // state of the current Peer object?
   string next_hop_uuid;
-  CHECK_OK(queue_->GetNextRoutingHopFromLeader(peer_pb().permanent_uuid(), &next_hop_uuid));
+  if (!FLAGS_raft_enable_multi_hop_proxy_routing) {
+    next_hop_uuid = peer_pb().permanent_uuid();
+  } else {
+    CHECK_OK(queue_->GetNextRoutingHopFromLeader(peer_pb().permanent_uuid(), &next_hop_uuid));
+  }
 
   shared_ptr<PeerProxy> next_hop_proxy = peer_proxy_pool_->Get(next_hop_uuid);
   if (!next_hop_proxy) {

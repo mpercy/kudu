@@ -48,6 +48,7 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/opid_util.h"
+#include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/ref_counted_replicate.h"
 #include "kudu/consensus/routing.h"
 #include "kudu/consensus/time_manager.h"
@@ -96,6 +97,8 @@ class ConsensusQueueTest : public KuduTest {
 
   virtual void SetUp() OVERRIDE {
     KuduTest::SetUp();
+
+    FLAGS_raft_enable_multi_hop_proxy_routing = false; // No proxying for this test.
     fs_manager_.reset(new FsManager(env_, FsManagerOpts(GetTestPath("fs_root"))));
     ASSERT_OK(fs_manager_->CreateInitialFileSystemLayout());
     ASSERT_OK(fs_manager_->Open());

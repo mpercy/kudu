@@ -36,6 +36,7 @@
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/quorum_util.h"
+#include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/routing.h"
 #include "kudu/consensus/time_manager.h"
 #include "kudu/gutil/bind.h"
@@ -668,7 +669,13 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     request->set_caller_term(current_term);
     unreachable_time = MonoTime::Now() - peer_copy.last_communication_time;
 
-    RETURN_NOT_OK(routing_table_->NextHop(local_peer_pb_.permanent_uuid(), uuid, &next_hop_uuid));
+    if (!FLAGS_raft_enable_multi_hop_proxy_routing) {
+      next_hop_uuid = uuid;
+    } else {
+      RETURN_NOT_OK_PREPEND(routing_table_->NextHop(local_peer_pb_.permanent_uuid(), uuid,
+                                                    &next_hop_uuid),
+                            Substitute("unable to route next request for peer $0", uuid));
+    }
   }
 
   // Always trigger a health status update check at the end of this function.

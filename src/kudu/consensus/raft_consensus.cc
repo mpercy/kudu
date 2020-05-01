@@ -136,7 +136,7 @@ DEFINE_bool(raft_prepare_replacement_before_eviction, true,
 TAG_FLAG(raft_prepare_replacement_before_eviction, advanced);
 TAG_FLAG(raft_prepare_replacement_before_eviction, experimental);
 
-DEFINE_bool(raft_enable_multi_hop_proxy_routing, true,
+DEFINE_bool(raft_enable_multi_hop_proxy_routing, false,
             "Enables multi-hop routing. When disabled, causes any tablet "
             "server acting as a proxy to forward any incoming replication "
             "request directly to the destination node, if it is part of the "

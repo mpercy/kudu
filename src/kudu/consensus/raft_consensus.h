@@ -53,6 +53,8 @@
 #include "kudu/util/random.h"
 #include "kudu/util/status_callback.h"
 
+DECLARE_bool(raft_enable_multi_hop_proxy_routing);
+
 namespace kudu {
 
 typedef std::lock_guard<simple_spinlock> Lock;
