@@ -2208,6 +2208,10 @@ Status RaftConsensus::ChangeProxyTopology(const ChangeProxyTopologyRequestPB& re
   return routing_table_->UpdateProxyTopology(req.new_config());
 }
 
+ChangeProxyTopologyRequestPB RaftConsensus::GetProxyTopology() const {
+  return routing_table_->GetProxyTopology();
+}
+
 void RaftConsensus::Stop() {
   TRACE_EVENT2("consensus", "RaftConsensus::Shutdown",
                "peer", peer_uuid(),

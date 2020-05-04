@@ -320,6 +320,9 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   // Change the proxy topology.
   Status ChangeProxyTopology(const ChangeProxyTopologyRequestPB& req);
 
+  // Return the proxy topology.
+  ChangeProxyTopologyRequestPB GetProxyTopology() const;
+
   // Returns the last OpId (either received or committed, depending on the
   // 'type' argument) that the Consensus implementation knows about.
   // Returns boost::none if RaftConsensus was not properly initialized.
