@@ -318,10 +318,10 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
                             boost::optional<tserver::TabletServerErrorPB::Code>* error_code);
 
   // Change the proxy topology.
-  Status ChangeProxyTopology(const ChangeProxyTopologyRequestPB& req);
+  Status ChangeProxyTopology(const ProxyTopologyPB& proxy_topology);
 
   // Return the proxy topology.
-  ChangeProxyTopologyRequestPB GetProxyTopology() const;
+  ProxyTopologyPB GetProxyTopology() const;
 
   // Returns the last OpId (either received or committed, depending on the
   // 'type' argument) that the Consensus implementation knows about.

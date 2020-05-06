@@ -2204,11 +2204,11 @@ Status RaftConsensus::UnsafeChangeConfig(
   });
 }
 
-Status RaftConsensus::ChangeProxyTopology(const ChangeProxyTopologyRequestPB& req) {
-  return routing_table_->UpdateProxyTopology(req.new_config());
+Status RaftConsensus::ChangeProxyTopology(const ProxyTopologyPB& proxy_topology) {
+  return routing_table_->UpdateProxyTopology(proxy_topology);
 }
 
-ChangeProxyTopologyRequestPB RaftConsensus::GetProxyTopology() const {
+ProxyTopologyPB RaftConsensus::GetProxyTopology() const {
   return routing_table_->GetProxyTopology();
 }
 
