@@ -2056,9 +2056,6 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
           if (peer.attrs().has_replace()) {
             modified_peer->mutable_attrs()->set_replace(peer.attrs().replace());
           }
-          if (peer.attrs().has_proxy_from()) {
-            modified_peer->mutable_attrs()->set_proxy_from(peer.attrs().proxy_from());
-          }
           // Ensure that MODIFY_PEER actually modified something.
           if (MessageDifferencer::Equals(orig_peer, *modified_peer)) {
             return Status::InvalidArgument("must modify a field when calling MODIFY_PEER");
@@ -2243,7 +2240,11 @@ Status RaftConsensus::UnsafeChangeConfig(
 }
 
 Status RaftConsensus::ChangeProxyTopology(const ProxyTopologyPB& proxy_topology) {
-  return routing_table_->UpdateProxyTopology(proxy_topology);
+  Status s = routing_table_->UpdateProxyTopology(proxy_topology);
+  if (FLAGS_raft_enable_multi_hop_proxy_routing && s.ok()) {
+    LOG_WITH_PREFIX(INFO) << "updated routing table:\n" << routing_table_->ToString();
+  }
+  return s;
 }
 
 ProxyTopologyPB RaftConsensus::GetProxyTopology() const {
