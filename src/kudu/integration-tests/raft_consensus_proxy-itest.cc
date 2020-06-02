@@ -48,6 +48,7 @@ DECLARE_bool(allow_unsafe_replication_factor);
 DECLARE_bool(catalog_manager_wait_for_new_tablets_to_elect_leader);
 DECLARE_bool(enable_leader_failure_detection);
 DECLARE_bool(raft_enable_multi_hop_proxy_routing);
+DECLARE_int32(raft_proxy_max_hops);
 DECLARE_string(rpc_encryption);
 DECLARE_string(rpc_authentication);
 
@@ -115,6 +116,7 @@ void RaftConsensusProxyITest::SendNoOpAsync(string tablet_id, string src_uuid, s
   req.set_dest_uuid(std::move(dest_uuid));
   req.set_caller_uuid(std::move(src_uuid));
   req.set_caller_term(opid.term());
+  req.set_proxy_hops_remaining(FLAGS_raft_proxy_max_hops);
   req.set_all_replicated_index(0);
   req.set_committed_index(0);
   *req.mutable_preceding_id() = std::move(preceding_opid);
