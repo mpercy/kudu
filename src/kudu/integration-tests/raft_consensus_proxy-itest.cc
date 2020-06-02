@@ -52,6 +52,10 @@ DECLARE_int32(raft_proxy_max_hops);
 DECLARE_string(rpc_encryption);
 DECLARE_string(rpc_authentication);
 
+METRIC_DECLARE_entity(tablet);
+METRIC_DECLARE_counter(raft_proxy_num_requests_success);
+METRIC_DECLARE_counter(raft_proxy_num_requests_hops_remaining_exhausted);
+
 using boost::optional;
 using kudu::consensus::ConsensusRequestPB;
 using kudu::consensus::ConsensusResponsePB;
@@ -148,8 +152,33 @@ void RaftConsensusProxyITest::SendNoOpAsync(string tablet_id, string src_uuid, s
   next_ts->consensus_proxy->UpdateConsensusAsync(req, resp.get(), controller.get(), rc);
 }
 
-// Test that we can delete the leader replica while scanning it and still get
-// results back.
+static Status CountProxyRequestsSuccess(tserver::MiniTabletServer* ts, int64_t* val) {
+  int64_t ret;
+  RETURN_NOT_OK(GetInt64Metric(
+      HostPort(ts->bound_http_addr()),
+      &METRIC_ENTITY_tablet,
+      nullptr,
+      &METRIC_raft_proxy_num_requests_success,
+      "value",
+      &ret));
+  *val = ret;
+  return Status::OK();
+}
+
+static Status CountProxyRequestsHopsRemainingExhausted(tserver::MiniTabletServer* ts, int64_t* val) {
+  int64_t ret;
+  RETURN_NOT_OK(GetInt64Metric(
+      HostPort(ts->bound_http_addr()),
+      &METRIC_ENTITY_tablet,
+      nullptr,
+      &METRIC_raft_proxy_num_requests_hops_remaining_exhausted,
+      "value",
+      &ret));
+  *val = ret;
+  return Status::OK();
+}
+
+// Basic routing test with a fake leader.
 TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderNoRouting) {
   const int kNumReplicas = 2;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
@@ -203,6 +232,8 @@ TEST_F(RaftConsensusProxyITest, ProxyFakeLeaderWithRouting) {
   //
   const int kNumReplicas = 4;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
+
+  FLAGS_raft_enable_multi_hop_proxy_routing = true;
 
   NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
   FLAGS_enable_leader_failure_detection = false;
@@ -287,6 +318,8 @@ TEST_F(RaftConsensusProxyITest, ProxyRealLeaderWithRouting) {
   const int kNumReplicas = 4;
   const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
 
+  FLAGS_raft_enable_multi_hop_proxy_routing = true;
+
   NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
   FLAGS_enable_leader_failure_detection = false;
   FLAGS_catalog_manager_wait_for_new_tablets_to_elect_leader = false;
@@ -308,32 +341,143 @@ TEST_F(RaftConsensusProxyITest, ProxyRealLeaderWithRouting) {
   ASSERT_OK(itest::StartElection(leader, tablet_id, kTimeout));
   ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/ 1));
 
-  // Change the toplogy to look like TS0, TS1 -> TS2 -> TS3.
-  ConsensusStatePB cstate;
-  ASSERT_OK(WaitUntilNoPendingConfig(leader, tablet_id, kTimeout, &cstate));
-
-  RaftConfigPB new_config = cstate.committed_config();
-  ASSERT_EQ(4, new_config.peers_size());
-
-  vector<consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB> changes;
+  consensus::ProxyTopologyPB proxy_topology;
   for (int i = 2; i < kNumReplicas; i++) {
-    consensus::BulkChangeConfigRequestPB::ConfigChangeItemPB change_pb;
-    change_pb.set_type(consensus::MODIFY_PEER);
-    change_pb.mutable_peer()->set_permanent_uuid(cluster_->mini_tablet_server(i)->uuid());
-    change_pb.mutable_peer()->mutable_attrs()->set_proxy_from(
-        cluster_->mini_tablet_server(i - 1)->uuid());
-    changes.emplace_back(std::move(change_pb));
+    consensus::ProxyEdgePB* peer = proxy_topology.add_proxy_edges();
+    peer->set_peer_uuid(cluster_->mini_tablet_server(i)->uuid());
+    peer->set_proxy_from_uuid(cluster_->mini_tablet_server(i - 1)->uuid());
   }
-  ASSERT_OK(BulkChangeConfig(leader, tablet_id, changes, kTimeout));
+  // Change on all the servers.
+  for (int i = 0; i < kNumReplicas; i++) {
+    auto ts = ts_map_[cluster_->mini_tablet_server(i)->uuid()];
+    LOG(INFO) << "changing proxy routing for ts " << i << " (" << ts->uuid() << ")";
+    ASSERT_OK(itest::ChangeProxyTopology(ts, tablet_id, proxy_topology, kTimeout));
+  }
 
   // Number of operations we have replicated to the replica set before starting our workload.
-  const int kNumOpsReplicatedBeforeWriting = 2;
-  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id,
-                                  kNumOpsReplicatedBeforeWriting));
+  const int kNumOpsReplicatedBeforeWriting = 1; // no-op
 
   // Now run a workload on the leader and wait until all replicas converge.
   workload.Start();
   while (workload.batches_completed() < 10) {
+    SleepFor(MonoDelta::FromMilliseconds(50));
+  }
+
+  LOG(INFO) << "waiting for proxy success count to bump...";
+  ASSERT_EVENTUALLY([&] {
+    int64_t ts1_proxy_num_success;
+    ASSERT_OK(CountProxyRequestsSuccess(cluster_->mini_tablet_server(1), &ts1_proxy_num_success));
+    int64_t ts2_proxy_num_success;
+    ASSERT_OK(CountProxyRequestsSuccess(cluster_->mini_tablet_server(2), &ts2_proxy_num_success));
+    LOG(INFO) << "ts1 success: " << ts1_proxy_num_success << ", ts2 success: " << ts2_proxy_num_success;
+    ASSERT_TRUE(ts1_proxy_num_success > 0 || ts2_proxy_num_success > 0);
+  });
+
+  workload.StopAndJoin();
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id,
+                                  kNumOpsReplicatedBeforeWriting + workload.batches_completed()));
+}
+
+// Ensure routing loops are detected.
+TEST_F(RaftConsensusProxyITest, ProxyRealLeaderDetectRoutingLoop) {
+  // A is the leader
+  //
+  // We create a routing loop with inconsistencies across the cluster:
+  //
+  // topology according to B:
+  //
+  //   A* -> B -> C -> D
+  //
+  // topology according to C:
+  //
+  //   A* -> C -> B -> D
+  //
+  // Therefore, any message sent from A to D through B or C will loop between B
+  // and C until the hops remaining is exhausted, at which point we will
+  // increment an error counter.
+  //
+  const int kNumReplicas = 4;
+  const MonoDelta kTimeout = MonoDelta::FromSeconds(30);
+
+  FLAGS_raft_enable_multi_hop_proxy_routing = true;
+
+  NO_FATALS(StartCluster(/*num_tablet_servers=*/ kNumReplicas));
+  FLAGS_enable_leader_failure_detection = false;
+  FLAGS_catalog_manager_wait_for_new_tablets_to_elect_leader = false;
+
+  // Create the test table.
+  TestWorkload workload(cluster_.get());
+  workload.set_num_replicas(kNumReplicas);
+  workload.Setup();
+
+  // Determine the generated tablet id.
+  ASSERT_OK(inspect_->WaitForReplicaCount(kNumReplicas));
+  vector<string> tablets = inspect_->ListTablets();
+  ASSERT_EQ(1, tablets.size());
+  const string& tablet_id = tablets[0];
+
+  const int kLeaderIndex = 0; // first ts is the leader
+  TServerDetails* leader = ts_map_[cluster_->mini_tablet_server(kLeaderIndex)->uuid()];
+  ASSERT_OK(WaitUntilTabletRunning(leader, tablet_id, kTimeout));
+  ASSERT_OK(itest::StartElection(leader, tablet_id, kTimeout));
+  ASSERT_OK(WaitForServersToAgree(kTimeout, ts_map_, tablet_id, /*minimum_index=*/ 1));
+
+  consensus::ProxyTopologyPB proxy_topology;
+  for (int i = 2; i < kNumReplicas; i++) {
+    consensus::ProxyEdgePB* peer = proxy_topology.add_proxy_edges();
+    peer->set_peer_uuid(cluster_->mini_tablet_server(i)->uuid());
+    peer->set_proxy_from_uuid(cluster_->mini_tablet_server(i - 1)->uuid());
+  }
+  // Change on all the servers.
+  for (int i = 0; i < kNumReplicas; i++) {
+    auto ts = ts_map_[cluster_->mini_tablet_server(i)->uuid()];
+    LOG(INFO) << "changing proxy routing for ts " << i << " (" << ts->uuid() << ")";
+    ASSERT_OK(itest::ChangeProxyTopology(ts, tablet_id, proxy_topology, kTimeout));
+  }
+
+  // Create the inconsistency per above.
+  consensus::ProxyTopologyPB other_proxy_topology;
+  {
+    consensus::ProxyEdgePB* peer = proxy_topology.add_proxy_edges();
+    peer->set_peer_uuid(cluster_->mini_tablet_server(3)->uuid());
+    peer->set_proxy_from_uuid(cluster_->mini_tablet_server(1)->uuid());
+  }
+  {
+    consensus::ProxyEdgePB* peer = proxy_topology.add_proxy_edges();
+    peer->set_peer_uuid(cluster_->mini_tablet_server(1)->uuid());
+    peer->set_proxy_from_uuid(cluster_->mini_tablet_server(2)->uuid());
+  }
+  {
+    auto ts = ts_map_[cluster_->mini_tablet_server(2)->uuid()];
+    LOG(INFO) << "changing proxy routing for ts " << 2 << " (" << ts->uuid() << ")";
+    ASSERT_OK(itest::ChangeProxyTopology(ts, tablet_id, other_proxy_topology, kTimeout));
+  }
+
+  // Number of operations we have replicated to the replica set before starting our workload.
+  const int kNumOpsReplicatedBeforeWriting = 1;
+
+  // Now run a workload on the leader and wait until all replicas converge.
+  workload.Start();
+
+  LOG(INFO) << "waiting to detect routing loop...";
+  ASSERT_EVENTUALLY([&] {
+    int64_t ts1_proxy_num_ttl_errors;
+    ASSERT_OK(CountProxyRequestsHopsRemainingExhausted(cluster_->mini_tablet_server(1), &ts1_proxy_num_ttl_errors));
+    int64_t ts2_proxy_num_ttl_errors;
+    ASSERT_OK(CountProxyRequestsHopsRemainingExhausted(cluster_->mini_tablet_server(2), &ts2_proxy_num_ttl_errors));
+    LOG(INFO) << "ts1 ttl errors: " << ts1_proxy_num_ttl_errors << ", ts2 ttl_errors: " << ts2_proxy_num_ttl_errors;
+    ASSERT_TRUE(ts1_proxy_num_ttl_errors > 0 || ts2_proxy_num_ttl_errors > 0);
+  });
+
+  // Resolve the inconsistency.
+  for (int i = 0; i < kNumReplicas; i++) {
+    auto ts = ts_map_[cluster_->mini_tablet_server(i)->uuid()];
+    LOG(INFO) << "changing proxy routing for ts " << i << " (" << ts->uuid() << ")";
+    ASSERT_OK(itest::ChangeProxyTopology(ts, tablet_id, other_proxy_topology, kTimeout));
+  }
+
+  int64_t initial_batches = workload.batches_completed();
+  while (workload.batches_completed() < initial_batches + 10) {
     SleepFor(MonoDelta::FromMilliseconds(50));
   }
   workload.StopAndJoin();
